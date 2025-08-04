@@ -76,6 +76,9 @@ public:
                        OwnedArray<DeviceInfo>* devices,
                        OwnedArray<ConfigurationObject>* configurationObjects) override;
 
+    /** Called when the chain updates, to resize the sourceBuffers */
+    void resizeBuffers() override;
+
     /** Redis connection management */
     bool connectToRedis(const String& host, int port, const String& password = "");
     void disconnectFromRedis();

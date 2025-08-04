@@ -238,6 +238,21 @@ void RedisDataThread::updateSettings(OwnedArray<ContinuousChannel>* continuousCh
     }
 }
 
+void RedisDataThread::resizeBuffers()
+{
+    // Clear existing buffers
+    sourceBuffers.clear();
+
+    // Create one DataBuffer for our single data stream
+    // Buffer size: 10000 samples should be sufficient for Redis data
+    const int bufferSize = 10000;
+
+    DataBuffer* buffer = new DataBuffer(numChannels, bufferSize);
+    sourceBuffers.add(buffer);
+
+    LOGD("Redis DataThread buffers resized: ", numChannels, " channels, buffer size: ", bufferSize);
+}
+
 bool RedisDataThread::updateBuffer()
 {
     if (!isAcquiring.load() || !connectionStatus.load())
