@@ -30,8 +30,7 @@ RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, Redis
 {
     desiredWidth = 300;
 
-    createConnectionControls();
-    createDataControls();
+    // Create compact interface with just essential controls
     createStatusControls();
 
     updateSettings();
@@ -139,28 +138,35 @@ void RedisDataThreadEditor::createDataControls()
 
 void RedisDataThreadEditor::createStatusControls()
 {
+    // Configure button - opens popup with all settings
+    configureButton = std::make_unique<TextButton>("Configure Button");
+    configureButton->setBounds(10, 30, 100, 25);
+    configureButton->setButtonText("Configure...");
+    configureButton->addListener(this);
+    addAndMakeVisible(configureButton.get());
+
     // Connect button
     connectButton = std::make_unique<ToggleButton>("Connect Button");
-    connectButton->setBounds(10, 165, 80, 25);
+    connectButton->setBounds(120, 30, 80, 25);
     connectButton->setButtonText("Connect");
     connectButton->addListener(this);
     addAndMakeVisible(connectButton.get());
 
     // Test button
     testButton = std::make_unique<TextButton>("Test Button");
-    testButton->setBounds(100, 165, 60, 25);
+    testButton->setBounds(210, 30, 60, 25);
     testButton->setButtonText("Test");
     testButton->addListener(this);
     addAndMakeVisible(testButton.get());
 
     // Status
     statusLabel = std::make_unique<Label>("Status Label", "Status:");
-    statusLabel->setBounds(10, 195, 50, 20);
+    statusLabel->setBounds(10, 65, 50, 20);
     statusLabel->setFont(Font("Small Text", 12, Font::plain));
     addAndMakeVisible(statusLabel.get());
 
     statusValueLabel = std::make_unique<Label>("Status Value Label", "Disconnected");
-    statusValueLabel->setBounds(65, 195, 220, 20);
+    statusValueLabel->setBounds(65, 65, 220, 20);
     statusValueLabel->setFont(Font("Small Text", 12, Font::plain));
     statusValueLabel->setColour(Label::textColourId, Colours::red);
     addAndMakeVisible(statusValueLabel.get());
@@ -174,10 +180,9 @@ void RedisDataThreadEditor::paint(Graphics& g)
     g.setFont(Font("Small Text", 13, Font::bold));
     g.drawText("Redis DataThread", 8, 5, 200, 20, Justification::left, false);
 
-    // Draw section separators
+    // Draw section separator
     g.setColour(Colours::lightgrey);
-    g.drawLine(10, 105, getWidth() - 10, 105);
-    g.drawLine(10, 160, getWidth() - 10, 160);
+    g.drawLine(10, 60, getWidth() - 10, 60);
 }
 
 void RedisDataThreadEditor::resized()
@@ -210,7 +215,11 @@ void RedisDataThreadEditor::comboBoxChanged(ComboBox* comboBox)
 
 void RedisDataThreadEditor::buttonClicked(Button* button)
 {
-    if (button == connectButton.get())
+    if (button == configureButton.get())
+    {
+        showConfigurationDialog();
+    }
+    else if (button == connectButton.get())
     {
         if (connectButton->getToggleState())
         {
@@ -247,9 +256,9 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
         // Test connection without changing state
         if (validateSettings())
         {
-            String host = hostEditor->getText();
-            int port = portEditor->getText().getIntValue();
-            String password = passwordEditor->getText();
+            String host = dataThread->getRedisHost();
+            int port = dataThread->getRedisPort();
+            String password = dataThread->getRedisPassword();
 
             RedisDataThread tempThread(nullptr);
             if (tempThread.connectToRedis(host, port, password))
@@ -295,54 +304,34 @@ void RedisDataThreadEditor::updateConnectionStatus()
 
 void RedisDataThreadEditor::updateSettings()
 {
-    hostEditor->setText(dataThread->getRedisHost(), false);
-    portEditor->setText(String(dataThread->getRedisPort()), false);
-    channelEditor->setText(dataThread->getRedisChannel(), false);
-    sampleRateEditor->setText(String(dataThread->getSampleRate()), false);
-    numChannelsEditor->setText(String(dataThread->getNumChannels()), false);
-    dataFormatCombo->setSelectedItemIndex(dataThread->getDataFormat() == "json" ? 0 : 1, dontSendNotification);
+    // In compact mode, we don't have individual text editors
+    // Settings are managed through the configuration dialog
+    // Just update the connection status
+    updateConnectionStatus();
 }
 
 void RedisDataThreadEditor::applySettings()
 {
+    // In compact mode, settings are applied through the configuration dialog
+    // This method is called when connecting, so we just validate current settings
     if (!validateSettings())
         return;
 
-    String host = hostEditor->getText();
-    int port = portEditor->getText().getIntValue();
-    String password = passwordEditor->getText();
-    String channel = channelEditor->getText();
-    float sampleRate = sampleRateEditor->getText().getFloatValue();
-    int numChannels = numChannelsEditor->getText().getIntValue();
-    String dataFormat = dataFormatCombo->getSelectedItemIndex() == 0 ? "json" : "binary";
-
-    // Apply settings to data thread
-    dataThread->setRedisChannel(channel);
-    dataThread->setSampleRate(sampleRate);
-    dataThread->setNumChannels(numChannels);
-    dataThread->setDataFormat(dataFormat);
-
-    // Reconnect if settings changed and currently connected
-    if (dataThread->isConnected())
-    {
-        if (host != dataThread->getRedisHost() || port != dataThread->getRedisPort())
-        {
-            dataThread->connectToRedis(host, port, password);
-        }
-    }
+    // Settings are already stored in the dataThread object
+    // No need to read from editors since they don't exist in compact mode
 }
 
 bool RedisDataThreadEditor::validateSettings()
 {
     // Validate host
-    if (hostEditor->getText().isEmpty())
+    if (dataThread->getRedisHost().isEmpty())
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Host cannot be empty.");
         return false;
     }
 
     // Validate port
-    int port = portEditor->getText().getIntValue();
+    int port = dataThread->getRedisPort();
     if (port <= 0 || port > 65535)
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Port must be between 1 and 65535.");
@@ -350,14 +339,14 @@ bool RedisDataThreadEditor::validateSettings()
     }
 
     // Validate channel
-    if (channelEditor->getText().isEmpty())
+    if (dataThread->getRedisChannel().isEmpty())
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Channel cannot be empty.");
         return false;
     }
 
     // Validate sample rate
-    float sampleRate = sampleRateEditor->getText().getFloatValue();
+    float sampleRate = dataThread->getSampleRate();
     if (sampleRate <= 0)
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Sample rate must be positive.");
@@ -365,7 +354,7 @@ bool RedisDataThreadEditor::validateSettings()
     }
 
     // Validate number of channels
-    int numChannels = numChannelsEditor->getText().getIntValue();
+    int numChannels = dataThread->getNumChannels();
     if (numChannels <= 0 || numChannels > 1024)
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Number of channels must be between 1 and 1024.");
@@ -375,16 +364,48 @@ bool RedisDataThreadEditor::validateSettings()
     return true;
 }
 
+void RedisDataThreadEditor::showConfigurationDialog()
+{
+    // Create a dialog window with all Redis configuration options
+    AlertWindow configDialog("Redis Configuration",
+                            "Configure Redis connection settings",
+                            AlertWindow::NoIcon);
+
+    configDialog.addTextEditor("host", dataThread->getRedisHost(), "Host:");
+    configDialog.addTextEditor("port", String(dataThread->getRedisPort()), "Port:");
+    configDialog.addTextEditor("password", dataThread->getRedisPassword(), "Password:");
+    configDialog.addTextEditor("channel", dataThread->getRedisChannel(), "Channel:");
+    configDialog.addTextEditor("sampleRate", String(dataThread->getSampleRate()), "Sample Rate:");
+    configDialog.addTextEditor("numChannels", String(dataThread->getNumChannels()), "Channels:");
+
+    configDialog.addComboBox("dataFormat", StringArray("JSON", "Binary"), "Format:");
+    configDialog.getComboBoxComponent("dataFormat")->setSelectedItemIndex(
+        dataThread->getDataFormat() == "json" ? 0 : 1);
+
+    configDialog.addButton("OK", 1, KeyPress(KeyPress::returnKey));
+    configDialog.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
+
+    if (configDialog.runModalLoop() == 1) // OK button pressed
+    {
+        // Apply the settings from the dialog
+        dataThread->setRedisHost(configDialog.getTextEditorContents("host"));
+        dataThread->setRedisPort(configDialog.getTextEditorContents("port").getIntValue());
+        dataThread->setRedisPassword(configDialog.getTextEditorContents("password"));
+        dataThread->setRedisChannel(configDialog.getTextEditorContents("channel"));
+        dataThread->setSampleRate(configDialog.getTextEditorContents("sampleRate").getFloatValue());
+        dataThread->setNumChannels(configDialog.getTextEditorContents("numChannels").getIntValue());
+
+        String selectedFormat = configDialog.getComboBoxComponent("dataFormat")->getSelectedItemIndex() == 0 ? "json" : "binary";
+        dataThread->setDataFormat(selectedFormat);
+
+        updateSettings();
+    }
+}
+
 void RedisDataThreadEditor::startAcquisition()
 {
     // Disable editing during acquisition
-    hostEditor->setEnabled(false);
-    portEditor->setEnabled(false);
-    passwordEditor->setEnabled(false);
-    channelEditor->setEnabled(false);
-    sampleRateEditor->setEnabled(false);
-    numChannelsEditor->setEnabled(false);
-    dataFormatCombo->setEnabled(false);
+    configureButton->setEnabled(false);
     connectButton->setEnabled(false);
     testButton->setEnabled(false);
 }
@@ -392,13 +413,7 @@ void RedisDataThreadEditor::startAcquisition()
 void RedisDataThreadEditor::stopAcquisition()
 {
     // Re-enable editing after acquisition
-    hostEditor->setEnabled(true);
-    portEditor->setEnabled(true);
-    passwordEditor->setEnabled(true);
-    channelEditor->setEnabled(true);
-    sampleRateEditor->setEnabled(true);
-    numChannelsEditor->setEnabled(true);
-    dataFormatCombo->setEnabled(true);
+    configureButton->setEnabled(true);
     connectButton->setEnabled(true);
     testButton->setEnabled(true);
 }

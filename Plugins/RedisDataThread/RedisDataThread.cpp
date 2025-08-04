@@ -136,6 +136,21 @@ bool RedisDataThread::isConnected() const
     return connectionStatus.load();
 }
 
+void RedisDataThread::setRedisHost(const String& host)
+{
+    redisHost = host;
+}
+
+void RedisDataThread::setRedisPort(int port)
+{
+    redisPort = port;
+}
+
+void RedisDataThread::setRedisPassword(const String& password)
+{
+    redisPassword = password;
+}
+
 void RedisDataThread::setRedisChannel(const String& channel)
 {
     redisChannel = channel;

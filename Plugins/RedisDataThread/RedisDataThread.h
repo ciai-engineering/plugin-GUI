@@ -85,6 +85,9 @@ public:
     bool isConnected() const;
 
     /** Configuration setters */
+    void setRedisHost(const String& host);
+    void setRedisPort(int port);
+    void setRedisPassword(const String& password);
     void setRedisChannel(const String& channel);
     void setSampleRate(float sampleRate);
     void setNumChannels(int numChannels);
@@ -93,6 +96,7 @@ public:
     /** Configuration getters */
     String getRedisHost() const { return redisHost; }
     int getRedisPort() const { return redisPort; }
+    String getRedisPassword() const { return redisPassword; }
     String getRedisChannel() const { return redisChannel; }
     float getSampleRate() const { return sampleRate; }
     int getNumChannels() const { return numChannels; }
