@@ -98,9 +98,9 @@ public:
 
 private:
 #ifdef REDIS_ENABLED
-    redisContext* redisContext;
+    redisContext* redisCtx;
 #else
-    void* redisContext; // placeholder when Redis is not available
+    void* redisCtx; // placeholder when Redis is not available
 #endif
 
     // Connection parameters

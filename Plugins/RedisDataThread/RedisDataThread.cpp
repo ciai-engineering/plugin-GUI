@@ -26,7 +26,7 @@
 
 RedisDataThread::RedisDataThread(SourceNode* sn)
     : DataThread(sn)
-    , redisContext(nullptr)
+    , redisCtx(nullptr)
     , redisHost("localhost")
     , redisPort(6379)
     , redisChannel("openephys_data")
@@ -73,15 +73,15 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     disconnectFromRedis();
 
     // Create new connection
-    redisContext = redisConnect(host.toRawUTF8(), port);
+    redisCtx = redisConnect(host.toRawUTF8(), port);
 
-    if (redisContext == nullptr || redisContext->err)
+    if (redisCtx == nullptr || redisCtx->err)
     {
-        if (redisContext)
+        if (redisCtx)
         {
-            LOGE("Redis connection error: ", redisContext->errstr);
-            redisFree(redisContext);
-            redisContext = nullptr;
+            LOGE("Redis connection error: ", redisCtx->errstr);
+            redisFree(redisCtx);
+            redisCtx = nullptr;
         }
         else
         {
@@ -94,7 +94,7 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     // Authenticate if password is provided
     if (password.isNotEmpty())
     {
-        redisReply* reply = (redisReply*)redisCommand(redisContext, "AUTH %s", password.toRawUTF8());
+        redisReply* reply = (redisReply*)redisCommand(redisCtx, "AUTH %s", password.toRawUTF8());
         if (reply == nullptr || reply->type == REDIS_REPLY_ERROR)
         {
             LOGE("Redis authentication failed");
@@ -122,10 +122,10 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 void RedisDataThread::disconnectFromRedis()
 {
 #ifdef REDIS_ENABLED
-    if (redisContext)
+    if (redisCtx)
     {
-        redisFree(redisContext);
-        redisContext = nullptr;
+        redisFree(redisCtx);
+        redisCtx = nullptr;
     }
 #endif
     connectionStatus = false;
@@ -247,7 +247,7 @@ bool RedisDataThread::updateBuffer()
 
 #ifdef REDIS_ENABLED
     // Get data from Redis (blocking call with 1 second timeout)
-    redisReply* reply = (redisReply*)redisCommand(redisContext,
+    redisReply* reply = (redisReply*)redisCommand(redisCtx,
         "BLPOP %s 1", redisChannel.toRawUTF8());
 
     if (reply == nullptr)
@@ -295,8 +295,7 @@ bool RedisDataThread::updateBuffer()
                                                 &sampleNumber,
                                                 &timestamp,
                                                 &eventCode,
-                                                1,
-                                                numChannels);
+                                                1);
                 success = (written > 0);
             }
         }
@@ -382,12 +381,12 @@ bool RedisDataThread::parseBinaryData(const char* data, size_t length, Array<flo
 void RedisDataThread::handleRedisError(const String& operation)
 {
 #ifdef REDIS_ENABLED
-    if (redisContext && redisContext->err)
+    if (redisCtx && redisCtx->err)
     {
-        LOGE("Redis error in ", operation, ": ", redisContext->errstr);
+        LOGE("Redis error in ", operation, ": ", redisCtx->errstr);
 
         // Try to reconnect on connection errors
-        if (redisContext->err == REDIS_ERR_IO || redisContext->err == REDIS_ERR_EOF)
+        if (redisCtx->err == REDIS_ERR_IO || redisCtx->err == REDIS_ERR_EOF)
         {
             attemptReconnection();
         }
