@@ -30,7 +30,7 @@ RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, Redis
     : GenericEditor(parentNode)
     , dataThread(thread)
 {
-    desiredWidth = 300;
+    desiredWidth = 250;
 
     // Create compact interface with just essential controls
     createStatusControls();
@@ -140,63 +140,114 @@ void RedisDataThreadEditor::createDataControls()
 
 void RedisDataThreadEditor::createStatusControls()
 {
+    // Use standard Open Ephys layout positioning (x=24, y starting at 29)
+    int xPos = 24;
+    int yPos = 29;
+    int buttonHeight = 20;
+    int spacing = 25;
+
+    // Connection info display (similar to File Source's file path display)
+    connectionInfoLabel = std::make_unique<Label>("Connection Info", "Redis: Not configured");
+    connectionInfoLabel->setBounds(xPos, yPos, desiredWidth - 30, buttonHeight);
+    connectionInfoLabel->setFont(FontOptions("Inter", "Regular", 12));
+    connectionInfoLabel->setColour(Label::textColourId, findColour(ThemeColours::defaultText));
+    connectionInfoLabel->setColour(Label::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    connectionInfoLabel->setBorderSize(BorderSize<int>(1));
+    connectionInfoLabel->setJustificationType(Justification::centredLeft);
+    addAndMakeVisible(connectionInfoLabel.get());
+
+    yPos += spacing;
+
     // Configure button - opens popup with all settings
-    configureButton = std::make_unique<TextButton>("Configure Button");
-    configureButton->setBounds(10, 30, 100, 25);
-    configureButton->setButtonText("Configure...");
+    configureButton = std::make_unique<UtilityButton>("Configure...");
+    configureButton->setBounds(xPos, yPos, 80, buttonHeight);
     configureButton->addListener(this);
     addAndMakeVisible(configureButton.get());
 
     // Connect button
-    connectButton = std::make_unique<ToggleButton>("Connect Button");
-    connectButton->setBounds(120, 30, 80, 25);
-    connectButton->setButtonText("Connect");
+    connectButton = std::make_unique<UtilityButton>("Connect");
+    connectButton->setBounds(xPos + 90, yPos, 70, buttonHeight);
+    connectButton->setClickingTogglesState(true);
     connectButton->addListener(this);
     addAndMakeVisible(connectButton.get());
 
     // Test button
-    testButton = std::make_unique<TextButton>("Test Button");
-    testButton->setBounds(210, 30, 60, 25);
-    testButton->setButtonText("Test");
+    testButton = std::make_unique<UtilityButton>("Test");
+    testButton->setBounds(xPos + 170, yPos, 50, buttonHeight);
     testButton->addListener(this);
     addAndMakeVisible(testButton.get());
 
-    // Data button
-    dataButton = std::make_unique<TextButton>("Data Button");
-    dataButton->setBounds(10, 95, 60, 25);
-    dataButton->setButtonText("Data");
-    dataButton->addListener(this);
-    addAndMakeVisible(dataButton.get());
+    yPos += spacing;
 
-    // Status
+    // Status label and value
     statusLabel = std::make_unique<Label>("Status Label", "Status:");
-    statusLabel->setBounds(10, 65, 50, 20);
-    statusLabel->setFont(Font("Small Text", 12, Font::plain));
+    statusLabel->setBounds(xPos, yPos, 50, buttonHeight);
+    statusLabel->setFont(FontOptions("Inter", "Regular", 12));
+    statusLabel->setColour(Label::textColourId, findColour(ThemeColours::defaultText));
     addAndMakeVisible(statusLabel.get());
 
     statusValueLabel = std::make_unique<Label>("Status Value Label", "Disconnected");
-    statusValueLabel->setBounds(65, 65, 220, 20);
-    statusValueLabel->setFont(Font("Small Text", 12, Font::plain));
+    statusValueLabel->setBounds(xPos + 55, yPos, 165, buttonHeight);
+    statusValueLabel->setFont(FontOptions("Inter", "Regular", 12));
     statusValueLabel->setColour(Label::textColourId, Colours::red);
     addAndMakeVisible(statusValueLabel.get());
+
+    yPos += spacing;
+
+    // Data button
+    dataButton = std::make_unique<UtilityButton>("Data");
+    dataButton->setBounds(xPos, yPos, 60, buttonHeight);
+    dataButton->addListener(this);
+    addAndMakeVisible(dataButton.get());
 }
 
 void RedisDataThreadEditor::paint(Graphics& g)
 {
-    g.fillAll(Colours::darkgrey);
-
-    g.setColour(Colours::white);
-    g.setFont(Font("Small Text", 13, Font::bold));
-    g.drawText("Redis DataThread", 8, 5, 200, 20, Justification::left, false);
-
-    // Draw section separator
-    g.setColour(Colours::lightgrey);
-    g.drawLine(10, 60, getWidth() - 10, 60);
+    // Use standard GenericEditor paint method for consistent styling
+    GenericEditor::paint(g);
 }
 
 void RedisDataThreadEditor::resized()
 {
-    // Components are positioned with absolute coordinates in create methods
+    GenericEditor::resized();
+
+    // Reposition components using standard layout patterns
+    if (!getCollapsedState())
+    {
+        int xPos = 24;
+        int yPos = 29;
+        int buttonHeight = 20;
+        int spacing = 25;
+        int availableWidth = desiredWidth - 30;
+
+        // Connection info display
+        if (connectionInfoLabel)
+            connectionInfoLabel->setBounds(xPos, yPos, availableWidth, buttonHeight);
+
+        yPos += spacing;
+
+        // Button row
+        if (configureButton)
+            configureButton->setBounds(xPos, yPos, 80, buttonHeight);
+        if (connectButton)
+            connectButton->setBounds(xPos + 90, yPos, 70, buttonHeight);
+        if (testButton)
+            testButton->setBounds(xPos + 170, yPos, 50, buttonHeight);
+
+        yPos += spacing;
+
+        // Status row
+        if (statusLabel)
+            statusLabel->setBounds(xPos, yPos, 50, buttonHeight);
+        if (statusValueLabel)
+            statusValueLabel->setBounds(xPos + 55, yPos, 165, buttonHeight);
+
+        yPos += spacing;
+
+        // Data button
+        if (dataButton)
+            dataButton->setBounds(xPos, yPos, 60, buttonHeight);
+    }
 }
 
 void RedisDataThreadEditor::textEditorTextChanged(TextEditor& editor)
@@ -238,7 +289,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
                 applySettings();
                 if (dataThread->foundInputSource())
                 {
-                    connectButton->setButtonText("Disconnect");
+                    connectButton->setLabel("Disconnect");
                 }
                 else
                 {
@@ -257,7 +308,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
         {
             // Disconnect
             dataThread->disconnectFromRedis();
-            connectButton->setButtonText("Connect");
+            connectButton->setLabel("Connect");
         }
     }
     else if (button == testButton.get())
@@ -306,21 +357,27 @@ void RedisDataThreadEditor::updateConnectionStatus()
     {
         statusValueLabel->setColour(Label::textColourId, Colours::green);
         connectButton->setToggleState(true, dontSendNotification);
-        connectButton->setButtonText("Disconnect");
+        connectButton->setLabel("Disconnect");
     }
     else
     {
         statusValueLabel->setColour(Label::textColourId, Colours::red);
         connectButton->setToggleState(false, dontSendNotification);
-        connectButton->setButtonText("Connect");
+        connectButton->setLabel("Connect");
     }
 }
 
 void RedisDataThreadEditor::updateSettings()
 {
-    // In compact mode, we don't have individual text editors
-    // Settings are managed through the configuration dialog
-    // Just update the connection status
+    // Update connection info display
+    String connectionInfo = "Redis: " + dataThread->getRedisHost() + ":" + String(dataThread->getRedisPort());
+    if (!dataThread->getRedisChannel().isEmpty())
+    {
+        connectionInfo += " (" + dataThread->getRedisChannel() + ")";
+    }
+    connectionInfoLabel->setText(connectionInfo, dontSendNotification);
+
+    // Update connection status
     updateConnectionStatus();
 }
 

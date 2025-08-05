@@ -94,12 +94,13 @@ private:
     std::unique_ptr<ComboBox> dataFormatCombo;
 
     // Control buttons
-    std::unique_ptr<ToggleButton> connectButton;
-    std::unique_ptr<TextButton> testButton;
-    std::unique_ptr<TextButton> configureButton;
-    std::unique_ptr<TextButton> dataButton;
+    std::unique_ptr<UtilityButton> connectButton;
+    std::unique_ptr<UtilityButton> testButton;
+    std::unique_ptr<UtilityButton> configureButton;
+    std::unique_ptr<UtilityButton> dataButton;
 
     // Status display
+    std::unique_ptr<Label> connectionInfoLabel;
     std::unique_ptr<Label> statusLabel;
     std::unique_ptr<Label> statusValueLabel;
 
