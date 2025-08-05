@@ -84,6 +84,9 @@ public:
     void disconnectFromRedis();
     bool isConnected() const;
 
+    /** Data retrieval methods */
+    Array<String> getLatestRecords(int numRecords = 10);
+
     /** Configuration setters */
     void setRedisHost(const String& host);
     void setRedisPort(int port);

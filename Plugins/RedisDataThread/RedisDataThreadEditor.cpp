@@ -23,6 +23,8 @@
 
 #include "RedisDataThreadEditor.h"
 #include "RedisDataThread.h"
+#include "RedisDataDisplayPopup.h"
+#include <CoreServicesHeader.h>
 
 RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, RedisDataThread* thread)
     : GenericEditor(parentNode)
@@ -159,6 +161,13 @@ void RedisDataThreadEditor::createStatusControls()
     testButton->addListener(this);
     addAndMakeVisible(testButton.get());
 
+    // Data button
+    dataButton = std::make_unique<TextButton>("Data Button");
+    dataButton->setBounds(10, 95, 60, 25);
+    dataButton->setButtonText("Data");
+    dataButton->addListener(this);
+    addAndMakeVisible(dataButton.get());
+
     // Status
     statusLabel = std::make_unique<Label>("Status Label", "Status:");
     statusLabel->setBounds(10, 65, 50, 20);
@@ -275,6 +284,11 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
                                            "Failed to connect to Redis server.");
             }
         }
+    }
+    else if (button == dataButton.get())
+    {
+        // Show latest data from Redis
+        showLatestData();
     }
 }
 
@@ -408,6 +422,7 @@ void RedisDataThreadEditor::startAcquisition()
     configureButton->setEnabled(false);
     connectButton->setEnabled(false);
     testButton->setEnabled(false);
+    // Keep Data button enabled during acquisition
 }
 
 void RedisDataThreadEditor::stopAcquisition()
@@ -416,4 +431,25 @@ void RedisDataThreadEditor::stopAcquisition()
     configureButton->setEnabled(true);
     connectButton->setEnabled(true);
     testButton->setEnabled(true);
+    // Data button remains enabled
+}
+
+void RedisDataThreadEditor::showLatestData()
+{
+    if (!dataThread->isConnected())
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Not Connected",
+                                   "Please connect to Redis server first before retrieving data.");
+        return;
+    }
+
+    // Retrieve latest records from Redis
+    Array<String> records = dataThread->getLatestRecords(10);
+
+    // Create and show popup with the data
+    auto popup = std::make_unique<RedisDataDisplayPopup>(records, dataThread->getDataFormat());
+
+    // Show popup using the PopupManager
+    CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
 }
