@@ -178,3 +178,5 @@ build/
 
 #14. IDE stuff
 .idea
+
+__pycache__
