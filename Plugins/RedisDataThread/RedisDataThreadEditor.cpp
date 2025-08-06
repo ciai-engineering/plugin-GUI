@@ -133,9 +133,35 @@ void RedisDataThreadEditor::createDataControls()
     dataFormatCombo->setBounds(65, 135, 80, 20);
     dataFormatCombo->addItem("JSON", 1);
     dataFormatCombo->addItem("Binary", 2);
-    dataFormatCombo->setSelectedItemIndex(dataThread->getDataFormat() == "json" ? 0 : 1);
+    dataFormatCombo->addItem("BRANDBCI", 3);
+    dataFormatCombo->setSelectedItemIndex(dataThread->getDataFormat() == "json" ? 0 :
+                                         dataThread->getDataFormat() == "binary" ? 1 : 2);
     dataFormatCombo->addListener(this);
     addAndMakeVisible(dataFormatCombo.get());
+
+    // Stream Mode Toggle
+    streamModeLabel = std::make_unique<Label>("Stream Mode Label", "Stream Mode:");
+    streamModeLabel->setBounds(155, 135, 80, 20);
+    streamModeLabel->setFont(Font("Small Text", 12, Font::plain));
+    addAndMakeVisible(streamModeLabel.get());
+
+    streamModeButton = std::make_unique<ToggleButton>("Stream Mode");
+    streamModeButton->setBounds(240, 135, 50, 20);
+    streamModeButton->setToggleState(dataThread->getStreamMode(), dontSendNotification);
+    streamModeButton->addListener(this);
+    addAndMakeVisible(streamModeButton.get());
+
+    // Stream Pattern
+    streamPatternLabel = std::make_unique<Label>("Stream Pattern Label", "Pattern:");
+    streamPatternLabel->setBounds(10, 160, 60, 20);
+    streamPatternLabel->setFont(Font("Small Text", 12, Font::plain));
+    addAndMakeVisible(streamPatternLabel.get());
+
+    streamPatternEditor = std::make_unique<TextEditor>("Stream Pattern Editor");
+    streamPatternEditor->setBounds(75, 160, 130, 20);
+    streamPatternEditor->setText(dataThread->getStreamPattern());
+    streamPatternEditor->addListener(this);
+    addAndMakeVisible(streamPatternEditor.get());
 }
 
 void RedisDataThreadEditor::createStatusControls()
@@ -278,6 +304,10 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
     if (button == configureButton.get())
     {
         showConfigurationDialog();
+    }
+    else if (button == streamModeButton.get())
+    {
+        applySettings();
     }
     else if (button == connectButton.get())
     {
@@ -449,9 +479,17 @@ void RedisDataThreadEditor::showConfigurationDialog()
     configDialog.addTextEditor("sampleRate", String(dataThread->getSampleRate()), "Sample Rate:");
     configDialog.addTextEditor("numChannels", String(dataThread->getNumChannels()), "Channels:");
 
-    configDialog.addComboBox("dataFormat", StringArray("JSON", "Binary"), "Format:");
-    configDialog.getComboBoxComponent("dataFormat")->setSelectedItemIndex(
-        dataThread->getDataFormat() == "json" ? 0 : 1);
+    configDialog.addComboBox("dataFormat", StringArray("JSON", "Binary", "BRANDBCI"), "Format:");
+    int formatIndex = dataThread->getDataFormat() == "json" ? 0 :
+                     dataThread->getDataFormat() == "binary" ? 1 : 2;
+    configDialog.getComboBoxComponent("dataFormat")->setSelectedItemIndex(formatIndex);
+
+    // Add stream settings
+    configDialog.addTextEditor("streamPattern", dataThread->getStreamPattern(), "Stream Pattern:");
+
+    // Add stream mode toggle (using a combo box since AlertWindow doesn't support toggle buttons)
+    configDialog.addComboBox("streamMode", StringArray("List Mode", "Stream Mode"), "Mode:");
+    configDialog.getComboBoxComponent("streamMode")->setSelectedItemIndex(dataThread->getStreamMode() ? 1 : 0);
 
     configDialog.addButton("OK", 1, KeyPress(KeyPress::returnKey));
     configDialog.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
@@ -466,8 +504,15 @@ void RedisDataThreadEditor::showConfigurationDialog()
         dataThread->setSampleRate(configDialog.getTextEditorContents("sampleRate").getFloatValue());
         dataThread->setNumChannels(configDialog.getTextEditorContents("numChannels").getIntValue());
 
-        String selectedFormat = configDialog.getComboBoxComponent("dataFormat")->getSelectedItemIndex() == 0 ? "json" : "binary";
+        int selectedFormatIndex = configDialog.getComboBoxComponent("dataFormat")->getSelectedItemIndex();
+        String selectedFormat = selectedFormatIndex == 0 ? "json" :
+                               selectedFormatIndex == 1 ? "binary" : "brandbci";
         dataThread->setDataFormat(selectedFormat);
+
+        // Apply stream settings
+        dataThread->setStreamPattern(configDialog.getTextEditorContents("streamPattern"));
+        bool streamMode = configDialog.getComboBoxComponent("streamMode")->getSelectedItemIndex() == 1;
+        dataThread->setStreamMode(streamMode);
 
         updateSettings();
     }
