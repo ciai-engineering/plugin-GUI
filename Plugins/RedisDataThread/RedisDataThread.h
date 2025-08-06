@@ -96,6 +96,13 @@ public:
     void setNumChannels(int numChannels);
     void setDataFormat(const String& format);
 
+    /** Stream support methods */
+    void setStreamMode(bool useStreams);
+    void setStreamPattern(const String& pattern);
+    Array<String> discoverStreams(const String& pattern = "*");
+    bool subscribeToStream(const String& streamName);
+    void unsubscribeFromStream(const String& streamName);
+
     /** Configuration getters */
     String getRedisHost() const { return redisHost; }
     int getRedisPort() const { return redisPort; }
@@ -105,6 +112,11 @@ public:
     int getNumChannels() const { return numChannels; }
     String getDataFormat() const { return dataFormat; }
     String getConnectionStatus() const;
+
+    /** Stream getters */
+    bool getStreamMode() const { return useStreamMode; }
+    String getStreamPattern() const { return streamPattern; }
+    Array<String> getActiveStreams() const;
 
 private:
 #ifdef REDIS_ENABLED
@@ -122,7 +134,13 @@ private:
     // Data configuration
     float sampleRate;
     int numChannels;
-    String dataFormat; // "json", "binary"
+    String dataFormat; // "json", "binary", "brandbci"
+
+    // Stream configuration
+    bool useStreamMode;
+    String streamPattern;
+    String currentStreamId; // Last read stream ID for XREAD
+    Array<String> activeStreams;
 
     // State management
     std::atomic<bool> isAcquiring;
@@ -134,6 +152,13 @@ private:
     // Data parsing methods
     bool parseJsonData(const String& jsonStr, Array<float>& channelData);
     bool parseBinaryData(const char* data, size_t length, Array<float>& channelData);
+    bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
+
+    // Stream methods
+    bool updateBufferFromStreams();
+    bool updateBufferFromList(); // Legacy BLPOP method
+    bool readFromStream(const String& streamName, String& data, String& newId);
+    bool processStreamEntry(redisReply* fieldsReply);
 
     // Error handling
     void handleRedisError(const String& operation);

@@ -1,0 +1,235 @@
+# BRANDBCI to OpenEphys Integration Configuration
+# This file defines the configuration for integrating BRANDBCI with OpenEphys
+
+# Redis Connection Settings
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""  # Leave empty if no password
+  timeout: 5000  # Connection timeout in milliseconds
+  reconnect_attempts: 3
+  reconnect_delay: 1000  # Delay between reconnection attempts in milliseconds
+
+# Stream Discovery and Management
+streams:
+  # Pattern for automatic stream discovery
+  discovery_pattern: "*neural*"
+  
+  # Enable automatic stream discovery
+  auto_discovery: true
+  
+  # Maximum number of concurrent streams
+  max_streams: 10
+  
+  # Buffer size per stream (in samples)
+  buffer_size: 10000
+  
+  # Stream read timeout (milliseconds)
+  read_timeout: 1000
+  
+  # Specific streams to monitor (if auto_discovery is false)
+  monitored_streams:
+    - name: "neural_data_primary"
+      format: "brandbci"
+      channels: 96
+      sample_rate: 30000
+    - name: "neural_data_lfp"
+      format: "brandbci"
+      channels: 96
+      sample_rate: 1000
+    - name: "decoded_output"
+      format: "json"
+      channels: 2
+      sample_rate: 100
+
+# Data Processing Settings
+data_processing:
+  # Default data format
+  default_format: "brandbci"
+  
+  # Supported formats
+  supported_formats:
+    - "brandbci"
+    - "json"
+    - "binary"
+  
+  # Data validation settings
+  validation:
+    check_channel_count: true
+    check_sample_rate: true
+    check_timestamp_continuity: true
+    max_timestamp_gap: 1000  # milliseconds
+  
+  # Channel mapping and scaling
+  channel_mapping:
+    enabled: true
+    scale_factor: 0.195  # microvolts per bit
+    offset: 0.0
+  
+  # Preprocessing options
+  preprocessing:
+    remove_dc: true
+    apply_gain: true
+    default_gain: 1000.0
+
+# BRANDBCI Node Monitoring
+node_monitoring:
+  # Enable node status monitoring
+  enabled: true
+  
+  # Status check interval (milliseconds)
+  check_interval: 1000
+  
+  # Node status streams to monitor
+  status_streams:
+    - "supervisor_status"
+    - "*_state"  # All node state streams
+  
+  # Supergraph monitoring
+  supergraph:
+    enabled: true
+    stream_name: "supergraph_stream"
+    update_interval: 5000  # milliseconds
+  
+  # Node health criteria
+  health_criteria:
+    max_error_count: 5
+    max_silence_duration: 10000  # milliseconds
+    required_status: ["NODE_READY", "NODE_RUNNING"]
+
+# OpenEphys Integration Settings
+openephys:
+  # Plugin identification
+  plugin_name: "BRANDBCI Redis Source"
+  plugin_description: "Real-time neural data from BRANDBCI system"
+  
+  # Data stream configuration
+  data_stream:
+    name: "BRANDBCI Stream"
+    description: "Neural data from BRANDBCI Redis streams"
+    identifier: "brandbci.stream.1"
+    generates_timestamps: false
+  
+  # Channel configuration
+  channels:
+    name_prefix: "BRANDBCI_CH"
+    description_prefix: "BRANDBCI channel"
+    identifier_prefix: "brandbci.channel."
+    type: "ELECTRODE"
+    conversion_factor: 0.195  # microvolts
+  
+  # Buffer management
+  buffer:
+    size: 10000  # samples
+    update_interval: 10  # milliseconds
+
+# Performance Optimization
+performance:
+  # Threading configuration
+  threading:
+    use_separate_threads: true
+    stream_reader_priority: "high"
+    status_monitor_priority: "normal"
+    
+  # Memory management
+  memory:
+    use_memory_pools: true
+    pool_size: 1048576  # 1MB
+    numa_aware: false
+  
+  # Network optimization
+  network:
+    tcp_nodelay: true
+    socket_buffer_size: 65536
+    use_unix_socket: false  # Set to true for local connections
+    unix_socket_path: "/tmp/redis.sock"
+
+# Logging and Debugging
+logging:
+  # Log level: DEBUG, INFO, WARN, ERROR
+  level: "INFO"
+  
+  # Enable performance logging
+  performance_logging: true
+  
+  # Log file settings
+  file:
+    enabled: false
+    path: "/tmp/brandbci_redis_plugin.log"
+    max_size: 10485760  # 10MB
+    rotate: true
+  
+  # Console logging
+  console:
+    enabled: true
+    timestamp: true
+    thread_id: false
+
+# Error Handling and Recovery
+error_handling:
+  # Automatic recovery settings
+  auto_recovery:
+    enabled: true
+    max_attempts: 3
+    backoff_multiplier: 2.0
+    initial_delay: 1000  # milliseconds
+  
+  # Error notification
+  notifications:
+    show_popup: true
+    log_errors: true
+    send_to_status_bar: true
+  
+  # Fallback behavior
+  fallback:
+    continue_on_stream_error: true
+    use_last_known_config: true
+    graceful_degradation: true
+
+# User Interface Settings
+ui:
+  # Editor panel configuration
+  editor:
+    show_advanced_options: false
+    auto_refresh_streams: true
+    refresh_interval: 2000  # milliseconds
+  
+  # Status display
+  status:
+    show_node_health: true
+    show_data_rate: true
+    show_stream_count: true
+    update_interval: 500  # milliseconds
+  
+  # Stream selection
+  stream_selection:
+    allow_multiple: true
+    show_inactive_streams: false
+    group_by_type: true
+
+# Development and Testing
+development:
+  # Enable debug features
+  debug_mode: false
+  
+  # Test data generation
+  test_data:
+    enabled: false
+    sample_rate: 30000
+    channel_count: 96
+    amplitude: 100.0
+    frequency: 10.0  # Hz
+  
+  # Simulation mode
+  simulation:
+    enabled: false
+    simulate_node_failures: false
+    simulate_network_issues: false
+    failure_probability: 0.01  # 1%
+
+# Version and Compatibility
+version:
+  config_version: "1.0.0"
+  min_brandbci_version: "1.0.0"
+  min_openephys_version: "0.6.0"
+  min_redis_version: "6.0.0"

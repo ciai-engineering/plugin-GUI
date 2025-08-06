@@ -29,10 +29,13 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , redisCtx(nullptr)
     , redisHost("localhost")
     , redisPort(6379)
-    , redisChannel("openephys_data")
+    , redisChannel("neural_data_primary")
     , sampleRate(30000.0f)
-    , numChannels(32)
-    , dataFormat("json")
+    , numChannels(96)
+    , dataFormat("brandbci")
+    , useStreamMode(true)
+    , streamPattern("neural_*")
+    , currentStreamId("0-0")
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
@@ -44,6 +47,8 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     LOGD("  - Format: ", dataFormat);
     LOGD("  - Channels: ", numChannels);
     LOGD("  - Sample Rate: ", sampleRate);
+    LOGD("  - Stream Mode: ", useStreamMode ? "ENABLED" : "DISABLED");
+    LOGD("  - Stream Pattern: ", streamPattern);
     LOGD("  - Redis context: ", (redisCtx ? "initialized" : "null"));
     LOGD("  - Acquiring: ", isAcquiring.load());
     LOGD("  - Connected: ", connectionStatus.load());
@@ -72,8 +77,17 @@ std::unique_ptr<GenericEditor> RedisDataThread::createEditor(SourceNode* sn)
 
 bool RedisDataThread::foundInputSource()
 {
+    LOGD("foundInputSource() called - connection status: ", connectionStatus.load());
+    // Return true if already connected, otherwise try to connect
+    if (connectionStatus.load()) {
+        LOGD("foundInputSource() returning true - already connected");
+        return true;
+    }
+
     // Try to connect to Redis to verify the source is available
-    return connectToRedis(redisHost, redisPort, redisPassword);
+    bool result = connectToRedis(redisHost, redisPort, redisPassword);
+    LOGD("foundInputSource() connectToRedis result: ", result);
+    return result;
 }
 
 bool RedisDataThread::isReady()
@@ -149,22 +163,60 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         LOGD("No password provided - skipping authentication");
     }
 
-    // Test channel access
-    LOGD("Testing access to Redis channel: ", redisChannel);
-    redisReply* testReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
-    if (testReply == nullptr || testReply->type == REDIS_REPLY_ERROR)
+    // Test channel access based on mode
+    LOGD("Testing access to Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
+
+    redisReply* testReply = nullptr;
+    if (useStreamMode)
     {
-        LOGE("Cannot access Redis channel '", redisChannel, "': ", (testReply && testReply->str) ? testReply->str : "unknown error");
-        if (testReply) freeReplyObject(testReply);
-        disconnectFromRedis();
-        return false;
+        // For stream mode, check if key exists and is a stream
+        testReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", redisChannel.toRawUTF8());
+        if (testReply && testReply->type == REDIS_REPLY_STATUS)
+        {
+            String keyType(testReply->str);
+            if (keyType == "stream")
+            {
+                LOGD("Redis stream '", redisChannel, "' found and accessible");
+            }
+            else if (keyType == "none")
+            {
+                LOGD("Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
+            }
+            else
+            {
+                LOGE("Redis key '", redisChannel, "' exists but is not a stream (type: ", keyType, ")");
+                freeReplyObject(testReply);
+                disconnectFromRedis();
+                return false;
+            }
+        }
+        else
+        {
+            LOGE("Cannot check Redis key type for '", redisChannel, "'");
+            if (testReply) freeReplyObject(testReply);
+            disconnectFromRedis();
+            return false;
+        }
     }
     else
     {
-        int queueLength = (testReply->type == REDIS_REPLY_INTEGER) ? testReply->integer : -1;
-        LOGD("Redis channel '", redisChannel, "' accessible, current length: ", queueLength);
-        freeReplyObject(testReply);
+        // For list mode, use LLEN
+        testReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
+        if (testReply == nullptr || testReply->type == REDIS_REPLY_ERROR)
+        {
+            LOGE("Cannot access Redis channel '", redisChannel, "': ", (testReply && testReply->str) ? testReply->str : "unknown error");
+            if (testReply) freeReplyObject(testReply);
+            disconnectFromRedis();
+            return false;
+        }
+        else
+        {
+            int queueLength = (testReply->type == REDIS_REPLY_INTEGER) ? testReply->integer : -1;
+            LOGD("Redis channel '", redisChannel, "' accessible, current length: ", queueLength);
+        }
     }
+
+    if (testReply) freeReplyObject(testReply);
 
     // Save connection parameters
     redisHost = host;
@@ -233,6 +285,13 @@ void RedisDataThread::setNumChannels(int channels)
 void RedisDataThread::setDataFormat(const String& format)
 {
     dataFormat = format;
+
+    // Auto-enable stream mode for BRANDBCI format
+    if (format == "brandbci")
+    {
+        useStreamMode = true;
+        LOGD("Auto-enabled stream mode for BRANDBCI format");
+    }
 }
 
 String RedisDataThread::getConnectionStatus() const
@@ -258,39 +317,84 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         return records;
     }
 
-    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannel);
+    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
-    // Use LRANGE to get the latest records without removing them from the list
-    // LRANGE key start stop - gets elements from start to stop (inclusive)
-    // Use negative indices to get from the end: -1 is last element, -2 is second to last, etc.
-    int startIndex = -(numRecords);
-    int stopIndex = -1;
+    redisReply* reply = nullptr;
 
-    redisReply* reply = (redisReply*)redisCommand(redisCtx,
-        "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex);
+    if (useStreamMode)
+    {
+        // For streams, use XREVRANGE to get latest entries
+        reply = (redisReply*)redisCommand(redisCtx,
+            "XREVRANGE %s + - COUNT %d", redisChannel.toRawUTF8(), numRecords);
+    }
+    else
+    {
+        // For lists, use LRANGE to get the latest records without removing them from the list
+        // LRANGE key start stop - gets elements from start to stop (inclusive)
+        // Use negative indices to get from the end: -1 is last element, -2 is second to last, etc.
+        int startIndex = -(numRecords);
+        int stopIndex = -1;
+
+        reply = (redisReply*)redisCommand(redisCtx,
+            "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex);
+    }
 
     if (reply == nullptr)
     {
-        LOGE("LRANGE command returned null reply");
-        handleRedisError("LRANGE command failed");
+        LOGE("Redis command returned null reply");
+        handleRedisError("Redis command failed");
         return records;
     }
 
-    LOGD("LRANGE reply type: ", reply->type, ", elements: ",
+    LOGD("Redis reply type: ", reply->type, ", elements: ",
          (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
 
     if (reply->type == REDIS_REPLY_ARRAY)
     {
-        LOGD("Retrieved ", reply->elements, " records from Redis");
-
-        // Add records to array (they come in chronological order, oldest first)
-        for (size_t i = 0; i < reply->elements; i++)
+        if (useStreamMode)
         {
-            if (reply->element[i]->type == REDIS_REPLY_STRING)
+            // Parse stream entries: each entry is [id, [field1, value1, field2, value2, ...]]
+            LOGD("Retrieved ", reply->elements, " stream entries from Redis");
+
+            for (size_t i = 0; i < reply->elements; i++)
             {
-                String record(reply->element[i]->str, reply->element[i]->len);
-                records.add(record);
-                LOGD("Record ", i, " length: ", record.length(), " bytes");
+                redisReply* entryReply = reply->element[i];
+                if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
+                {
+                    // Get the field-value pairs
+                    redisReply* fieldsReply = entryReply->element[1];
+                    if (fieldsReply->type == REDIS_REPLY_ARRAY)
+                    {
+                        // Look for brandbci_data field
+                        for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                        {
+                            if (j + 1 < fieldsReply->elements &&
+                                fieldsReply->element[j]->type == REDIS_REPLY_STRING &&
+                                String(fieldsReply->element[j]->str) == "brandbci_data")
+                            {
+                                String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                records.add(record);
+                                LOGD("Stream record ", i, " length: ", record.length(), " bytes");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Parse list entries: each element is a string
+            LOGD("Retrieved ", reply->elements, " list records from Redis");
+
+            for (size_t i = 0; i < reply->elements; i++)
+            {
+                if (reply->element[i]->type == REDIS_REPLY_STRING)
+                {
+                    String record(reply->element[i]->str, reply->element[i]->len);
+                    records.add(record);
+                    LOGD("List record ", i, " length: ", record.length(), " bytes");
+                }
             }
         }
     }
@@ -300,7 +404,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     }
     else
     {
-        LOGE("Unexpected LRANGE reply type: ", reply->type);
+        LOGE("Unexpected Redis reply type: ", reply->type);
     }
 
     freeReplyObject(reply);
@@ -359,17 +463,41 @@ bool RedisDataThread::startAcquisition()
             return false;
         }
 
-        // Check data availability
-        redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
-        if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+        // Check data availability based on mode
+        if (useStreamMode)
         {
-            LOGD("✓ Redis channel '", redisChannel, "' has ", lenReply->integer, " samples available");
-            freeReplyObject(lenReply);
+            // For streams, check if stream exists and has data
+            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "XLEN %s", redisChannel.toRawUTF8());
+            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+            {
+                LOGD("✓ Redis stream '", redisChannel, "' has ", lenReply->integer, " entries available");
+                freeReplyObject(lenReply);
+            }
+            else if (lenReply && lenReply->type == REDIS_REPLY_ERROR)
+            {
+                LOGD("✓ Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
+                freeReplyObject(lenReply);
+            }
+            else
+            {
+                LOGE("❌ Cannot check Redis stream length");
+                if (lenReply) freeReplyObject(lenReply);
+            }
         }
         else
         {
-            LOGE("❌ Cannot check Redis channel length");
-            if (lenReply) freeReplyObject(lenReply);
+            // For lists, use LLEN
+            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
+            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+            {
+                LOGD("✓ Redis channel '", redisChannel, "' has ", lenReply->integer, " samples available");
+                freeReplyObject(lenReply);
+            }
+            else
+            {
+                LOGE("❌ Cannot check Redis channel length");
+                if (lenReply) freeReplyObject(lenReply);
+            }
         }
     }
     else
@@ -380,6 +508,16 @@ bool RedisDataThread::startAcquisition()
 #endif
 
     isAcquiring = true;
+
+    // Start the data thread - this is critical!
+    LOGD("🚀 Starting data thread...");
+    if (!isThreadRunning()) {
+        startThread();
+        LOGD("✅ Data thread started successfully");
+    } else {
+        LOGD("⚠️ Data thread was already running");
+    }
+
     LOGD("✅ Redis data acquisition started successfully");
     LOGD("=== ACQUISITION ACTIVE ===");
     return true;
@@ -397,6 +535,17 @@ bool RedisDataThread::stopAcquisition()
     }
 
     isAcquiring = false;
+
+    // Stop the data thread
+    LOGD("🛑 Stopping data thread...");
+    if (isThreadRunning()) {
+        signalThreadShouldExit();
+        waitForThreadToExit(5000); // Wait up to 5 seconds
+        LOGD("✅ Data thread stopped successfully");
+    } else {
+        LOGD("⚠️ Data thread was not running");
+    }
+
     LOGD("✅ Redis data acquisition stopped");
     LOGD("Final sample count: ", currentSampleNumber.load());
     LOGD("=== ACQUISITION STOPPED ===");
@@ -459,17 +608,25 @@ bool RedisDataThread::updateBuffer()
     static int64 lastLogTime = 0;
     static int64 samplesProcessed = 0;
     static int64 lastSampleCount = 0;
+    static int64 callCount = 0;
+
+    callCount++;
+
+    // Log every call for the first 10 calls, then every 100 calls
+    if (callCount <= 10 || callCount % 100 == 0) {
+        LOGD("🔄 updateBuffer() called #", callCount, " - acquiring: ", isAcquiring.load(), ", connected: ", connectionStatus.load());
+    }
 
     // Check acquisition state
     if (!isAcquiring.load())
     {
-        LOGD("updateBuffer: Not acquiring, returning false");
+        if (callCount <= 5) LOGD("updateBuffer: Not acquiring, returning false");
         return false;
     }
 
     if (!connectionStatus.load())
     {
-        LOGE("updateBuffer: Redis not connected, returning false");
+        if (callCount <= 5) LOGE("updateBuffer: Redis not connected, returning false");
         return false;
     }
 
@@ -481,10 +638,29 @@ bool RedisDataThread::updateBuffer()
         int64 samplesDelta = samplesProcessed - lastSampleCount;
         double rate = samplesDelta / 5.0; // samples per second
         LOGD("Redis Status: processed=", samplesProcessed, " samples, rate=", rate, " samples/sec, acquiring=", isAcquiring.load(), ", connected=", connectionStatus.load());
+        LOGD("  Mode: ", useStreamMode ? "STREAMS" : "LISTS", ", Active streams: ", activeStreams.size());
         lastLogTime = currentTime;
         lastSampleCount = samplesProcessed;
     }
 
+    // Route to appropriate update method based on mode
+    LOGD("updateBuffer: Using ", useStreamMode ? "STREAM" : "LIST", " mode");
+    bool result = useStreamMode ? updateBufferFromStreams() : updateBufferFromList();
+    if (result) {
+        samplesProcessed++;
+    }
+    return result;
+
+    return false; // This should not be reached
+#else
+    LOGE("Redis not compiled - REDIS_ENABLED not defined");
+    return false;
+#endif
+}
+
+bool RedisDataThread::updateBufferFromList()
+{
+#ifdef REDIS_ENABLED
     // Log BLPOP command execution
     LOGD("Executing BLPOP command on channel: ", redisChannel);
 
@@ -568,10 +744,10 @@ bool RedisDataThread::updateBuffer()
 
                 if (success)
                 {
-                    samplesProcessed++;
-                    if (samplesProcessed % 1000 == 0) // Log every 1000 samples
+                    currentSampleNumber++;
+                    if (currentSampleNumber.load() % 1000 == 0) // Log every 1000 samples
                     {
-                        LOGD("Successfully processed ", samplesProcessed, " samples total");
+                        LOGD("Successfully processed ", currentSampleNumber.load(), " samples total");
                     }
                 }
                 else
@@ -600,7 +776,120 @@ bool RedisDataThread::updateBuffer()
     }
 
     freeReplyObject(reply);
-    LOGD("updateBuffer returning: ", success);
+    LOGD("updateBufferFromList returning: ", success);
+    return success;
+#else
+    LOGE("Redis not compiled - REDIS_ENABLED not defined");
+    return false;
+#endif
+}
+
+bool RedisDataThread::updateBufferFromStreams()
+{
+#ifdef REDIS_ENABLED
+    if (activeStreams.size() == 0)
+    {
+        LOGD("No active streams - discovering streams with pattern: ", streamPattern);
+        Array<String> discoveredStreams = discoverStreams(streamPattern);
+
+        for (int i = 0; i < discoveredStreams.size(); i++)
+        {
+            subscribeToStream(discoveredStreams[i]);
+        }
+
+        if (activeStreams.size() == 0)
+        {
+            LOGD("No streams found matching pattern: ", streamPattern);
+            return true; // Not an error, just no data available
+        }
+    }
+
+    // Read from all active streams
+    String streamNames = "";
+    String streamIds = "";
+
+    for (int i = 0; i < activeStreams.size(); i++)
+    {
+        if (i > 0) {
+            streamNames += " ";
+            streamIds += " ";
+        }
+        streamNames += activeStreams[i];
+        streamIds += currentStreamId;
+    }
+
+    LOGD("Reading from streams: ", streamNames, " with IDs: ", streamIds);
+
+    // Use XREAD to read from multiple streams
+    redisReply* reply = (redisReply*)redisCommand(redisCtx,
+        "XREAD BLOCK 1000 STREAMS %s %s",
+        streamNames.toRawUTF8(),
+        streamIds.toRawUTF8());
+
+    if (reply == nullptr)
+    {
+        LOGE("XREAD command returned null reply");
+        handleRedisError("XREAD command failed");
+        return false;
+    }
+
+    LOGD("XREAD reply type: ", reply->type, ", elements: ", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+
+    if (reply->type == REDIS_REPLY_NIL)
+    {
+        // Timeout, no data available
+        LOGD("XREAD timeout - no data available in streams");
+        freeReplyObject(reply);
+        return true; // Not an error
+    }
+
+    bool success = false;
+    if (reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+    {
+        LOGD("XREAD returned array with ", reply->elements, " stream(s) - processing data");
+
+        // Process each stream that has data
+        for (size_t streamIdx = 0; streamIdx < reply->elements; streamIdx++)
+        {
+            redisReply* streamReply = reply->element[streamIdx];
+            if (streamReply->type == REDIS_REPLY_ARRAY && streamReply->elements == 2)
+            {
+                // Get stream name and entries
+                String streamName(streamReply->element[0]->str);
+                redisReply* entriesReply = streamReply->element[1];
+
+                LOGD("Processing stream: ", streamName, " with ", entriesReply->elements, " entries");
+
+                // Process each entry in the stream
+                for (size_t entryIdx = 0; entryIdx < entriesReply->elements; entryIdx++)
+                {
+                    redisReply* entryReply = entriesReply->element[entryIdx];
+                    if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
+                    {
+                        // Update stream position
+                        currentStreamId = String(entryReply->element[0]->str);
+
+                        // Get field-value pairs
+                        redisReply* fieldsReply = entryReply->element[1];
+                        if (fieldsReply->type == REDIS_REPLY_ARRAY)
+                        {
+                            success = processStreamEntry(fieldsReply);
+                            if (success) break; // Process one entry at a time
+                        }
+                    }
+                }
+
+                if (success) break; // Process one stream at a time
+            }
+        }
+    }
+    else
+    {
+        LOGE("Unexpected XREAD reply format: type=", reply->type, ", elements=", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+    }
+
+    freeReplyObject(reply);
+    LOGD("updateBufferFromStreams returning: ", success);
     return success;
 #else
     LOGE("Redis not compiled - REDIS_ENABLED not defined");
@@ -730,6 +1019,153 @@ bool RedisDataThread::parseBinaryData(const char* data, size_t length, Array<flo
     return true;
 }
 
+bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
+{
+#ifdef REDIS_ENABLED
+    // Parse field-value pairs from stream entry
+    for (size_t i = 0; i < fieldsReply->elements; i += 2)
+    {
+        if (i + 1 < fieldsReply->elements)
+        {
+            String fieldName(fieldsReply->element[i]->str);
+            String fieldValue(fieldsReply->element[i + 1]->str);
+
+            LOGD("Stream field: ", fieldName, " = ", fieldValue.substring(0, 100), "...");
+
+            // Process different field types
+            if (fieldName == "brandbci_data" || fieldName == "data")
+            {
+                Array<float> channelData;
+                bool parseSuccess = false;
+
+                if (dataFormat == "brandbci")
+                {
+                    parseSuccess = parseBrandBCIData(fieldValue, channelData);
+                }
+                else if (dataFormat == "json")
+                {
+                    parseSuccess = parseJsonData(fieldValue, channelData);
+                }
+
+                if (parseSuccess && channelData.size() == numChannels)
+                {
+                    // Add data to buffer
+                    if (sourceBuffers.size() > 0)
+                    {
+                        DataBuffer* buffer = sourceBuffers[0];
+                        if (buffer != nullptr)
+                        {
+                            // Prepare data for buffer (channel-major order)
+                            int numSamples = 1; // One sample per stream entry
+                            int64 sampleNumber = currentSampleNumber.load();
+                            double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
+                            uint64 eventCode = 0;
+
+                            int written = buffer->addToBuffer(channelData.getRawDataPointer(),
+                                                            &sampleNumber,
+                                                            &timestamp,
+                                                            &eventCode,
+                                                            numSamples);
+
+                            if (written > 0)
+                            {
+                                currentSampleNumber++;
+                                LOGD("Added ", numChannels, " channels to buffer, sample #", currentSampleNumber.load());
+                                return true;
+                            }
+                            else
+                            {
+                                LOGE("Failed to write to DataBuffer");
+                            }
+                        }
+                    }
+                }
+                else if (!parseSuccess)
+                {
+                    LOGE("Failed to parse stream data in format: ", dataFormat);
+                }
+                else
+                {
+                    LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numChannels);
+                }
+            }
+        }
+    }
+
+    return false;
+#else
+    return false;
+#endif
+}
+
+bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& channelData)
+{
+    LOGD("Parsing BRANDBCI data, length: ", jsonStr.length(), " characters");
+
+    try
+    {
+        var jsonData = JSON::parse(jsonStr);
+        LOGD("BRANDBCI JSON parsing successful");
+
+        if (!jsonData.isObject())
+        {
+            LOGE("Invalid BRANDBCI format: not an object");
+            return false;
+        }
+
+        // Check for BRANDBCI structure: data.channels
+        if (jsonData.hasProperty("data"))
+        {
+            var dataObj = jsonData["data"];
+            if (dataObj.isObject() && dataObj.hasProperty("channels"))
+            {
+                var channels = dataObj["channels"];
+                if (channels.isArray())
+                {
+                    channelData.clear();
+                    channelData.ensureStorageAllocated(channels.size());
+
+                    for (int i = 0; i < channels.size(); i++)
+                    {
+                        if (channels[i].isDouble() || channels[i].isInt())
+                        {
+                            channelData.add((float)channels[i]);
+                        }
+                        else
+                        {
+                            LOGE("Non-numeric value in BRANDBCI channels array at index ", i);
+                            return false;
+                        }
+                    }
+
+                    LOGD("Successfully parsed ", channelData.size(), " BRANDBCI channels");
+                    return true;
+                }
+            }
+        }
+
+        // Fallback: try direct channels array (legacy format)
+        if (jsonData.hasProperty("channels"))
+        {
+            return parseJsonData(jsonStr, channelData);
+        }
+
+        LOGE("BRANDBCI data missing required structure");
+        return false;
+
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("Exception parsing BRANDBCI data: ", e.what());
+        return false;
+    }
+    catch (...)
+    {
+        LOGE("Unknown exception parsing BRANDBCI data");
+        return false;
+    }
+}
+
 void RedisDataThread::handleRedisError(const String& operation)
 {
 #ifdef REDIS_ENABLED
@@ -767,4 +1203,145 @@ bool RedisDataThread::attemptReconnection()
         LOGE("Redis reconnection failed");
         return false;
     }
+}
+
+// Stream management methods
+void RedisDataThread::setStreamMode(bool useStreams)
+{
+    useStreamMode = useStreams;
+    LOGD("Stream mode set to: ", useStreams ? "ENABLED" : "DISABLED");
+
+    if (useStreams && dataFormat == "json")
+    {
+        // Auto-switch to brandbci format for better stream support
+        dataFormat = "brandbci";
+        LOGD("Auto-switched data format to 'brandbci' for stream mode");
+    }
+}
+
+void RedisDataThread::setStreamPattern(const String& pattern)
+{
+    streamPattern = pattern;
+    LOGD("Stream pattern set to: ", pattern);
+}
+
+Array<String> RedisDataThread::discoverStreams(const String& pattern)
+{
+    Array<String> streams;
+
+#ifdef REDIS_ENABLED
+    if (!redisCtx || !connectionStatus.load())
+    {
+        LOGE("Cannot discover streams - Redis not connected");
+        return streams;
+    }
+
+    LOGD("Discovering streams with pattern: ", pattern);
+
+    // Use KEYS command to find streams matching pattern
+    redisReply* reply = (redisReply*)redisCommand(redisCtx, "KEYS %s", pattern.toRawUTF8());
+
+    if (reply && reply->type == REDIS_REPLY_ARRAY)
+    {
+        LOGD("Found ", reply->elements, " potential streams");
+
+        for (size_t i = 0; i < reply->elements; i++)
+        {
+            if (reply->element[i]->type == REDIS_REPLY_STRING)
+            {
+                String streamName(reply->element[i]->str);
+
+                // Verify it's actually a stream
+                redisReply* typeReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", streamName.toRawUTF8());
+
+                if (typeReply && typeReply->type == REDIS_REPLY_STATUS &&
+                    String(typeReply->str) == "stream")
+                {
+                    streams.add(streamName);
+                    LOGD("Discovered stream: ", streamName);
+                }
+
+                if (typeReply) freeReplyObject(typeReply);
+            }
+        }
+    }
+    else
+    {
+        LOGE("Failed to discover streams - KEYS command failed");
+    }
+
+    if (reply) freeReplyObject(reply);
+
+    LOGD("Stream discovery complete: found ", streams.size(), " streams");
+#endif
+
+    return streams;
+}
+
+bool RedisDataThread::subscribeToStream(const String& streamName)
+{
+#ifdef REDIS_ENABLED
+    if (!redisCtx || !connectionStatus.load())
+    {
+        LOGE("Cannot subscribe to stream - Redis not connected");
+        return false;
+    }
+
+    // Check if stream exists
+    redisReply* reply = (redisReply*)redisCommand(redisCtx, "EXISTS %s", streamName.toRawUTF8());
+    bool exists = (reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
+
+    if (reply) freeReplyObject(reply);
+
+    if (exists)
+    {
+        // Add to active streams if not already present
+        bool alreadyActive = false;
+        for (int i = 0; i < activeStreams.size(); i++)
+        {
+            if (activeStreams[i] == streamName)
+            {
+                alreadyActive = true;
+                break;
+            }
+        }
+
+        if (!alreadyActive)
+        {
+            activeStreams.add(streamName);
+            LOGD("Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
+        }
+        else
+        {
+            LOGD("Already subscribed to stream: ", streamName);
+        }
+
+        return true;
+    }
+    else
+    {
+        LOGE("Cannot subscribe to non-existent stream: ", streamName);
+        return false;
+    }
+#else
+    return false;
+#endif
+}
+
+void RedisDataThread::unsubscribeFromStream(const String& streamName)
+{
+    for (int i = 0; i < activeStreams.size(); i++)
+    {
+        if (activeStreams[i] == streamName)
+        {
+            activeStreams.remove(i);
+            LOGD("Unsubscribed from stream: ", streamName, " (remaining active: ", activeStreams.size(), ")");
+            break;
+        }
+    }
+}
+
+Array<String> RedisDataThread::getActiveStreams() const
+{
+    return activeStreams;
 }
