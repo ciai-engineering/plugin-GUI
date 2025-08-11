@@ -93,9 +93,7 @@ private:
     std::unique_ptr<Label> dataFormatLabel;
     std::unique_ptr<ComboBox> dataFormatCombo;
 
-    // Stream settings
-    std::unique_ptr<Label> streamModeLabel;
-    std::unique_ptr<ToggleButton> streamModeButton;
+    // Stream settings (always enabled for Redis streams)
     std::unique_ptr<Label> streamPatternLabel;
     std::unique_ptr<TextEditor> streamPatternEditor;
 

@@ -1208,10 +1208,15 @@ bool RedisDataThread::attemptReconnection()
 // Stream management methods
 void RedisDataThread::setStreamMode(bool useStreams)
 {
-    useStreamMode = useStreams;
-    LOGD("Stream mode set to: ", useStreams ? "ENABLED" : "DISABLED");
+    // Redis data is written using XADD (streams), so always use stream mode
+    if (!useStreams)
+    {
+        LOGE("Attempted to disable stream mode, but Redis data uses XADD (streams). Keeping stream mode enabled.");
+    }
+    useStreamMode = true;  // Always use stream mode
+    LOGD("Stream mode: ENABLED (Redis uses XADD for streams)");
 
-    if (useStreams && dataFormat == "json")
+    if (dataFormat == "json")
     {
         // Auto-switch to brandbci format for better stream support
         dataFormat = "brandbci";

@@ -139,17 +139,7 @@ void RedisDataThreadEditor::createDataControls()
     dataFormatCombo->addListener(this);
     addAndMakeVisible(dataFormatCombo.get());
 
-    // Stream Mode Toggle
-    streamModeLabel = std::make_unique<Label>("Stream Mode Label", "Stream Mode:");
-    streamModeLabel->setBounds(155, 135, 80, 20);
-    streamModeLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(streamModeLabel.get());
-
-    streamModeButton = std::make_unique<ToggleButton>("Stream Mode");
-    streamModeButton->setBounds(240, 135, 50, 20);
-    streamModeButton->setToggleState(dataThread->getStreamMode(), dontSendNotification);
-    streamModeButton->addListener(this);
-    addAndMakeVisible(streamModeButton.get());
+    // Note: Stream mode is always enabled since Redis data uses XADD (streams)
 
     // Stream Pattern
     streamPatternLabel = std::make_unique<Label>("Stream Pattern Label", "Pattern:");
@@ -305,10 +295,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
     {
         showConfigurationDialog();
     }
-    else if (button == streamModeButton.get())
-    {
-        applySettings();
-    }
+
     else if (button == connectButton.get())
     {
         if (connectButton->getToggleState())
@@ -439,10 +426,10 @@ bool RedisDataThreadEditor::validateSettings()
         return false;
     }
 
-    // Validate channel
+    // Validate stream pattern (used as channel for Redis streams)
     if (dataThread->getRedisChannel().isEmpty())
     {
-        AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Channel cannot be empty.");
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Stream pattern cannot be empty.");
         return false;
     }
 
@@ -475,7 +462,6 @@ void RedisDataThreadEditor::showConfigurationDialog()
     configDialog.addTextEditor("host", dataThread->getRedisHost(), "Host:");
     configDialog.addTextEditor("port", String(dataThread->getRedisPort()), "Port:");
     configDialog.addTextEditor("password", dataThread->getRedisPassword(), "Password:");
-    configDialog.addTextEditor("channel", dataThread->getRedisChannel(), "Channel:");
     configDialog.addTextEditor("sampleRate", String(dataThread->getSampleRate()), "Sample Rate:");
     configDialog.addTextEditor("numChannels", String(dataThread->getNumChannels()), "Channels:");
 
@@ -484,12 +470,8 @@ void RedisDataThreadEditor::showConfigurationDialog()
                      dataThread->getDataFormat() == "binary" ? 1 : 2;
     configDialog.getComboBoxComponent("dataFormat")->setSelectedItemIndex(formatIndex);
 
-    // Add stream settings
+    // Add stream settings (Redis uses XADD for streams, so only stream pattern is needed)
     configDialog.addTextEditor("streamPattern", dataThread->getStreamPattern(), "Stream Pattern:");
-
-    // Add stream mode toggle (using a combo box since AlertWindow doesn't support toggle buttons)
-    configDialog.addComboBox("streamMode", StringArray("List Mode", "Stream Mode"), "Mode:");
-    configDialog.getComboBoxComponent("streamMode")->setSelectedItemIndex(dataThread->getStreamMode() ? 1 : 0);
 
     configDialog.addButton("OK", 1, KeyPress(KeyPress::returnKey));
     configDialog.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
@@ -500,7 +482,6 @@ void RedisDataThreadEditor::showConfigurationDialog()
         dataThread->setRedisHost(configDialog.getTextEditorContents("host"));
         dataThread->setRedisPort(configDialog.getTextEditorContents("port").getIntValue());
         dataThread->setRedisPassword(configDialog.getTextEditorContents("password"));
-        dataThread->setRedisChannel(configDialog.getTextEditorContents("channel"));
         dataThread->setSampleRate(configDialog.getTextEditorContents("sampleRate").getFloatValue());
         dataThread->setNumChannels(configDialog.getTextEditorContents("numChannels").getIntValue());
 
@@ -509,10 +490,13 @@ void RedisDataThreadEditor::showConfigurationDialog()
                                selectedFormatIndex == 1 ? "binary" : "brandbci";
         dataThread->setDataFormat(selectedFormat);
 
-        // Apply stream settings
-        dataThread->setStreamPattern(configDialog.getTextEditorContents("streamPattern"));
-        bool streamMode = configDialog.getComboBoxComponent("streamMode")->getSelectedItemIndex() == 1;
-        dataThread->setStreamMode(streamMode);
+        // Apply stream settings (Redis uses XADD streams, so always use stream mode)
+        String streamPattern = configDialog.getTextEditorContents("streamPattern");
+        dataThread->setStreamPattern(streamPattern);
+        // Set the channel to the stream pattern for compatibility
+        dataThread->setRedisChannel(streamPattern);
+        // Always use stream mode since Redis data is written with XADD
+        dataThread->setStreamMode(true);
 
         updateSettings();
     }
