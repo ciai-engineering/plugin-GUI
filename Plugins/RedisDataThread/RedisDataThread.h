@@ -25,6 +25,7 @@
 #define __REDISDATATHREAD_H_INCLUDED__
 
 #include <DataThreadHeaders.h>
+#include <map>
 
 #ifdef REDIS_ENABLED
 #include <hiredis/hiredis.h>
@@ -32,6 +33,8 @@
 
 #include <atomic>
 #include <memory>
+#include <thread>
+#include <unordered_map>
 
 class SourceNode;
 
@@ -139,8 +142,9 @@ private:
     // Stream configuration
     bool useStreamMode;
     String streamPattern;
-    String currentStreamId; // Last read stream ID for XREAD
+    String currentStreamId; // Default stream ID for new streams
     Array<String> activeStreams;
+    std::map<String, String> streamPositions; // Per-stream position tracking
 
     // State management
     std::atomic<bool> isAcquiring;
@@ -148,6 +152,19 @@ private:
 
     // Sample counting
     std::atomic<int64> currentSampleNumber;
+
+    // Basic performance monitoring
+    struct PerformanceMetrics {
+        std::atomic<float> avgLatency{0.0f};
+        std::atomic<float> maxLatency{0.0f};
+        std::atomic<float> throughput{0.0f};
+        std::atomic<int> droppedSamples{0};
+        std::atomic<int64> totalSamplesProcessed{0};
+    };
+
+    PerformanceMetrics perfMetrics;
+
+
 
     // Data parsing methods
     bool parseJsonData(const String& jsonStr, Array<float>& channelData);

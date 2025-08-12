@@ -35,7 +35,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , dataFormat("brandbci")
     , useStreamMode(true)
     , streamPattern("neural_*")
-    , currentStreamId("0-0")
+    , currentStreamId("$")
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
@@ -58,15 +58,24 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
 #else
     LOGE("❌ Redis support is DISABLED - recompile with REDIS_ENABLED=1");
 #endif
+
+    LOGD("✅ RedisDataThread initialized");
 }
 
 RedisDataThread::~RedisDataThread()
 {
+    LOGD("🔄 RedisDataThread destructor called");
+
     if (isAcquiring.load())
     {
         stopAcquisition();
     }
+
+
+
     disconnectFromRedis();
+
+    LOGD("✅ RedisDataThread destroyed");
 }
 
 std::unique_ptr<GenericEditor> RedisDataThread::createEditor(SourceNode* sn)
@@ -791,16 +800,26 @@ bool RedisDataThread::updateBufferFromStreams()
     {
         LOGD("No active streams - discovering streams with pattern: ", streamPattern);
         Array<String> discoveredStreams = discoverStreams(streamPattern);
+        LOGD("Stream discovery found ", discoveredStreams.size(), " streams");
 
         for (int i = 0; i < discoveredStreams.size(); i++)
         {
+            LOGD("Subscribing to discovered stream: ", discoveredStreams[i]);
             subscribeToStream(discoveredStreams[i]);
         }
 
         if (activeStreams.size() == 0)
         {
             LOGD("No streams found matching pattern: ", streamPattern);
+            LOGD("This could mean:");
+            LOGD("  1. No streams exist in Redis with pattern: ", streamPattern);
+            LOGD("  2. Redis connection issue");
+            LOGD("  3. Stream discovery function failed");
             return true; // Not an error, just no data available
+        }
+        else
+        {
+            LOGD("Successfully subscribed to ", activeStreams.size(), " streams");
         }
     }
 
@@ -808,23 +827,67 @@ bool RedisDataThread::updateBufferFromStreams()
     String streamNames = "";
     String streamIds = "";
 
+    // Validate that we have active streams
+    if (activeStreams.size() == 0)
+    {
+        LOGD("No active streams available for XREAD");
+        return true; // Not an error, just no data available
+    }
+
+    // Validate currentStreamId format
+    if (currentStreamId.isEmpty() ||
+        (!currentStreamId.contains("-") && currentStreamId != "0" && currentStreamId != "$"))
+    {
+        LOGE("Invalid currentStreamId format: '", currentStreamId, "'. Resetting to '$'");
+        currentStreamId = "$";
+    }
+
+    // Build XREAD command with proper syntax
+    String xreadCommand = "XREAD BLOCK 1000 STREAMS";
+
+    // Add stream names
     for (int i = 0; i < activeStreams.size(); i++)
     {
+        xreadCommand += " ";
+        xreadCommand += activeStreams[i];
         if (i > 0) {
             streamNames += " ";
-            streamIds += " ";
         }
         streamNames += activeStreams[i];
-        streamIds += currentStreamId;
+    }
+
+    // Add stream IDs (each stream has its own position)
+    for (int i = 0; i < activeStreams.size(); i++)
+    {
+        String streamName = activeStreams[i];
+        String streamId = currentStreamId; // Default for new streams
+
+        // Check if we have a specific position for this stream
+        if (streamPositions.find(streamName) != streamPositions.end())
+        {
+            streamId = streamPositions[streamName];
+        }
+        else
+        {
+            // Initialize new stream position
+            streamPositions[streamName] = currentStreamId;
+            LOGD("Initialized stream position for '", streamName, "' to '", currentStreamId, "'");
+        }
+
+        xreadCommand += " ";
+        xreadCommand += streamId;
+        if (i > 0) {
+            streamIds += " ";
+        }
+        streamIds += streamId;
     }
 
     LOGD("Reading from streams: ", streamNames, " with IDs: ", streamIds);
+    LOGD("Active streams count: ", activeStreams.size(), ", currentStreamId: ", currentStreamId);
+    LOGD("Full XREAD command: ", xreadCommand);
 
     // Use XREAD to read from multiple streams
-    redisReply* reply = (redisReply*)redisCommand(redisCtx,
-        "XREAD BLOCK 1000 STREAMS %s %s",
-        streamNames.toRawUTF8(),
-        streamIds.toRawUTF8());
+    redisReply* reply = (redisReply*)redisCommand(redisCtx, xreadCommand.toRawUTF8());
 
     if (reply == nullptr)
     {
@@ -841,6 +904,26 @@ bool RedisDataThread::updateBufferFromStreams()
         LOGD("XREAD timeout - no data available in streams");
         freeReplyObject(reply);
         return true; // Not an error
+    }
+    else if (reply->type == REDIS_REPLY_ERROR)
+    {
+        // Redis returned an error - log the specific error message
+        String errorMsg(reply->str, reply->len);
+        LOGE("XREAD command failed with Redis error: ", errorMsg);
+        LOGE("Command was: XREAD BLOCK 1000 STREAMS ", streamNames, " ", streamIds);
+
+        // Check for common error conditions
+        if (errorMsg.contains("WRONGTYPE"))
+        {
+            LOGE("Error: One of the specified keys is not a stream. Check that the stream names are correct.");
+        }
+        else if (errorMsg.contains("syntax"))
+        {
+            LOGE("Error: XREAD command syntax error. Check stream names and IDs format.");
+        }
+
+        freeReplyObject(reply);
+        return false;
     }
 
     bool success = false;
@@ -866,8 +949,10 @@ bool RedisDataThread::updateBufferFromStreams()
                     redisReply* entryReply = entriesReply->element[entryIdx];
                     if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
                     {
-                        // Update stream position
-                        currentStreamId = String(entryReply->element[0]->str);
+                        // Update stream position for this specific stream
+                        String entryId = String(entryReply->element[0]->str);
+                        streamPositions[streamName] = entryId;
+                        LOGD("Updated stream position for '", streamName, "' to '", entryId, "'");
 
                         // Get field-value pairs
                         redisReply* fieldsReply = entryReply->element[1];
@@ -883,9 +968,20 @@ bool RedisDataThread::updateBufferFromStreams()
             }
         }
     }
+    else if (reply->type == REDIS_REPLY_ARRAY && reply->elements == 0)
+    {
+        // Empty array response - no data available but not an error
+        LOGD("XREAD returned empty array - no data available in streams");
+        freeReplyObject(reply);
+        return true;
+    }
     else
     {
         LOGE("Unexpected XREAD reply format: type=", reply->type, ", elements=", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+        if (reply->type == REDIS_REPLY_ERROR && reply->str)
+        {
+            LOGE("Redis error message: ", String(reply->str, reply->len));
+        }
     }
 
     freeReplyObject(reply);
@@ -1183,6 +1279,57 @@ void RedisDataThread::handleRedisError(const String& operation)
     {
         LOGE("Redis error in ", operation, ": unknown error");
     }
+#endif
+}
+
+
+
+bool RedisDataThread::readFromStream(const String& streamName, String& data, String& newId)
+{
+#ifdef REDIS_ENABLED
+    if (!redisCtx || !connectionStatus.load()) {
+        return false;
+    }
+
+    // Use XREAD to read from stream
+    redisReply* reply = (redisReply*)redisCommand(redisCtx,
+        "XREAD COUNT 1 BLOCK 1 STREAMS %s %s",
+        streamName.toRawUTF8(), currentStreamId.toRawUTF8());
+
+    if (!reply) {
+        handleRedisError("XREAD command failed");
+        return false;
+    }
+
+    bool success = false;
+
+    if (reply->type == REDIS_REPLY_ARRAY && reply->elements > 0) {
+        // Parse stream response
+        redisReply* streamReply = reply->element[0];
+        if (streamReply->type == REDIS_REPLY_ARRAY && streamReply->elements >= 2) {
+            redisReply* entriesReply = streamReply->element[1];
+            if (entriesReply->type == REDIS_REPLY_ARRAY && entriesReply->elements > 0) {
+                redisReply* entryReply = entriesReply->element[0];
+                if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2) {
+                    // Get entry ID
+                    newId = String(entryReply->element[0]->str);
+
+                    // Get entry data (field-value pairs)
+                    redisReply* fieldsReply = entryReply->element[1];
+                    if (fieldsReply->type == REDIS_REPLY_ARRAY && fieldsReply->elements >= 2) {
+                        // Assume first field contains our data
+                        data = String(fieldsReply->element[1]->str);
+                        success = true;
+                    }
+                }
+            }
+        }
+    }
+
+    freeReplyObject(reply);
+    return success;
+#else
+    return false;
 #endif
 }
 
