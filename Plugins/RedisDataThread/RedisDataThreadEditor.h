@@ -72,6 +72,13 @@ public:
     void startAcquisition() override;
     void stopAcquisition() override;
 
+    /** Configuration validation */
+    bool validateConfiguration();
+    void showValidationError(const String& message);
+    void updateConnectionStatus();
+    void updateErrorDisplay();
+    void updatePerformanceDisplay();
+
 private:
     RedisDataThread* dataThread;
 
@@ -108,11 +115,15 @@ private:
     std::unique_ptr<Label> statusLabel;
     std::unique_ptr<Label> statusValueLabel;
 
+    // Error display
+    std::unique_ptr<Label> errorLabel;
+    std::unique_ptr<UtilityButton> clearErrorsButton;
+    std::unique_ptr<UtilityButton> showErrorsButton;
+
     // Helper methods
     void createConnectionControls();
     void createDataControls();
     void createStatusControls();
-    void updateConnectionStatus();
     void applySettings();
     bool validateSettings();
     void showConfigurationDialog();

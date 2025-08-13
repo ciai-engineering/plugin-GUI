@@ -60,6 +60,14 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
 #endif
 
     LOGD("✅ RedisDataThread initialized");
+
+    // Initialize high-performance buffer pool
+    initializeBufferPool();
+
+    // Initialize raw data queue
+    for (size_t i = 0; i < RAW_QUEUE_SIZE; ++i) {
+        rawDataQueue[i].reset();
+    }
 }
 
 RedisDataThread::~RedisDataThread()
@@ -108,6 +116,7 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 {
 #ifdef REDIS_ENABLED
     LOGD("Attempting to connect to Redis server: ", host, ":", port);
+    updateConnectionState(ConnectionState::CONNECTING);
 
     // Disconnect existing connection
     if (connectionStatus.load())
@@ -116,60 +125,67 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         disconnectFromRedis();
     }
 
-    // Create new connection
+    // Create new connection with timeout
     LOGD("Creating Redis connection context");
-    redisCtx = redisConnect(host.toRawUTF8(), port);
+    struct timeval timeout = { 2, 0 }; // 2 seconds timeout
+    redisCtx = redisConnectWithTimeout(host.toRawUTF8(), port, timeout);
 
-    if (redisCtx == nullptr || redisCtx->err)
+    if (redisCtx == nullptr)
     {
-        if (redisCtx)
-        {
-            LOGE("Redis connection failed: ", redisCtx->errstr, " (error code: ", redisCtx->err, ")");
-            redisFree(redisCtx);
-            redisCtx = nullptr;
-        }
-        else
-        {
-            LOGE("Redis connection failed: Cannot allocate redis context");
-        }
+        addError("Failed to allocate Redis context", "ALLOC_FAILED", 4);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
         connectionStatus = false;
-        LOGE("Redis connection status set to FALSE");
+        return false;
+    }
+
+    if (redisCtx->err)
+    {
+        String errorMsg = String::formatted("Redis connection failed: %s (error code: %d)",
+            redisCtx->errstr, redisCtx->err);
+        addError(errorMsg, "CONNECT_ERROR", 3);
+
+        redisFree(redisCtx);
+        redisCtx = nullptr;
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        connectionStatus = false;
         return false;
     }
 
     LOGD("Redis context created successfully");
 
-    // Test connection with PING
-    LOGD("Testing Redis connection with PING command");
-    redisReply* pingReply = (redisReply*)redisCommand(redisCtx, "PING");
-    if (pingReply == nullptr || pingReply->type == REDIS_REPLY_ERROR)
-    {
-        LOGE("Redis PING failed - connection not working");
-        if (pingReply) freeReplyObject(pingReply);
-        disconnectFromRedis();
-        return false;
-    }
-    LOGD("Redis PING successful: ", (pingReply->str ? pingReply->str : "PONG"));
-    freeReplyObject(pingReply);
+    // Set socket timeout for operations
+    struct timeval tv = { 1, 0 }; // 1 second timeout for operations
+    redisSetTimeout(redisCtx, tv);
 
     // Authenticate if password is provided
     if (password.isNotEmpty())
     {
         LOGD("Authenticating with Redis using provided password");
-        redisReply* reply = (redisReply*)redisCommand(redisCtx, "AUTH %s", password.toRawUTF8());
-        if (reply == nullptr || reply->type == REDIS_REPLY_ERROR)
+        String result, errorMsg;
+        bool authSuccess = executeRedisCommand("AUTH " + password, result, errorMsg);
+
+        if (!authSuccess)
         {
-            LOGE("Redis authentication failed: ", (reply && reply->str) ? reply->str : "unknown error");
-            if (reply) freeReplyObject(reply);
+            addError("Redis authentication failed: " + errorMsg, "AUTH_FAILED", 3);
+            updateConnectionState(ConnectionState::AUTHENTICATION_FAILED);
             disconnectFromRedis();
             return false;
         }
-        LOGD("Redis authentication successful");
-        freeReplyObject(reply);
+
+        addError("Redis authentication successful", "AUTH_SUCCESS", 1);
     }
     else
     {
         LOGD("No password provided - skipping authentication");
+    }
+
+    // Test connection with PING
+    LOGD("Testing Redis connection with PING command");
+    if (!testRedisConnection())
+    {
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        disconnectFromRedis();
+        return false;
     }
 
     // Test channel access based on mode
@@ -351,7 +367,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     if (reply == nullptr)
     {
         LOGE("Redis command returned null reply");
-        handleRedisError("Redis command failed");
+        handleRedisError("Redis command failed", "");
         return records;
     }
 
@@ -516,6 +532,9 @@ bool RedisDataThread::startAcquisition()
     }
 #endif
 
+    // Start the high-performance data processing thread
+    startDataProcessingThread();
+
     isAcquiring = true;
 
     // Start the data thread - this is critical!
@@ -527,7 +546,7 @@ bool RedisDataThread::startAcquisition()
         LOGD("⚠️ Data thread was already running");
     }
 
-    LOGD("✅ Redis data acquisition started successfully");
+    LOGD("✅ Redis data acquisition started successfully with multi-threading");
     LOGD("=== ACQUISITION ACTIVE ===");
     return true;
 }
@@ -545,6 +564,9 @@ bool RedisDataThread::stopAcquisition()
 
     isAcquiring = false;
 
+    // Stop the high-performance data processing thread
+    stopDataProcessingThread();
+
     // Stop the data thread
     LOGD("🛑 Stopping data thread...");
     if (isThreadRunning()) {
@@ -555,7 +577,7 @@ bool RedisDataThread::stopAcquisition()
         LOGD("⚠️ Data thread was not running");
     }
 
-    LOGD("✅ Redis data acquisition stopped");
+    LOGD("✅ Redis data acquisition stopped with multi-threading cleanup");
     LOGD("Final sample count: ", currentSampleNumber.load());
     LOGD("=== ACQUISITION STOPPED ===");
     return true;
@@ -635,8 +657,46 @@ bool RedisDataThread::updateBuffer()
 
     if (!connectionStatus.load())
     {
-        if (callCount <= 5) LOGE("updateBuffer: Redis not connected, returning false");
-        return false;
+        if (callCount <= 5) LOGE("updateBuffer: Redis not connected");
+
+        // Attempt automatic reconnection if enabled
+        if (shouldAttemptReconnect())
+        {
+            LOGD("Attempting automatic reconnection...");
+            if (attemptReconnection())
+            {
+                addError("Automatic reconnection successful", "AUTO_RECONNECT_SUCCESS", 1);
+            }
+            else
+            {
+                addError("Automatic reconnection failed", "AUTO_RECONNECT_FAILED", 3);
+                return false;
+            }
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    // Perform periodic health checks on connected state
+    if (shouldPerformHealthCheck())
+    {
+        LOGD("Performing connection health check...");
+        if (!performConnectionHealthCheck())
+        {
+            LOGD("Health check failed, scheduling reconnection");
+            if (retryConfig.enableAutoReconnect)
+            {
+                updateConnectionState(ConnectionState::CONNECTION_FAILED);
+                scheduleReconnection();
+                return false;
+            }
+        }
+        else
+        {
+            LOGD("Health check passed");
+        }
     }
 
 #ifdef REDIS_ENABLED
@@ -652,12 +712,25 @@ bool RedisDataThread::updateBuffer()
         lastSampleCount = samplesProcessed;
     }
 
-    // Route to appropriate update method based on mode
+    // Route to appropriate update method based on mode with performance tracking
     LOGD("updateBuffer: Using ", useStreamMode ? "STREAM" : "LIST", " mode");
+
+    auto operationStart = std::chrono::high_resolution_clock::now();
     bool result = useStreamMode ? updateBufferFromStreams() : updateBufferFromList();
+    auto operationEnd = std::chrono::high_resolution_clock::now();
+
+    // Record operation performance
+    float operationLatency = std::chrono::duration<float, std::milli>(operationEnd - operationStart).count();
+    recordOperationLatency(operationLatency);
+
     if (result) {
         samplesProcessed++;
+        recordOperationSuccess();
+        perfMetrics.totalSamplesProcessed.fetch_add(1);
+    } else {
+        recordOperationFailure();
     }
+
     return result;
 
     return false; // This should not be reached
@@ -680,7 +753,7 @@ bool RedisDataThread::updateBufferFromList()
     if (reply == nullptr)
     {
         LOGE("BLPOP command returned null reply");
-        handleRedisError("BLPOP command failed");
+        handleRedisError("BLPOP command failed", "");
         return false;
     }
 
@@ -699,85 +772,19 @@ bool RedisDataThread::updateBufferFromList()
     {
         LOGD("BLPOP returned array with 2 elements - processing data");
 
-        // Parse data based on format
-        Array<float> channelData;
-        String dataStr(reply->element[1]->str, reply->element[1]->len);
+        // Use high-performance multi-threaded pipeline
+        LOGD("Data format: ", dataFormat, ", data length: ", reply->element[1]->len, " bytes");
 
-        LOGD("Data format: ", dataFormat, ", data length: ", dataStr.length(), " bytes");
-        LOGD("Raw data preview (first 100 chars): ", dataStr.substring(0, 100));
+        // Enqueue raw data for processing in dedicated thread
+        success = enqueueRawData(reply->element[1]->str, reply->element[1]->len, dataFormat.toStdString());
 
-        if (dataFormat == "json")
-        {
-            success = parseJsonData(dataStr, channelData);
-            LOGD("JSON parsing result: ", success ? "SUCCESS" : "FAILED", ", channels parsed: ", channelData.size());
+        if (success) {
+            LOGD("Successfully enqueued data for multi-threaded processing");
+        } else {
+            LOGE("Failed to enqueue data - queue may be full");
         }
-        else if (dataFormat == "binary")
-        {
-            success = parseBinaryData(reply->element[1]->str,
-                                    reply->element[1]->len, channelData);
-            LOGD("Binary parsing result: ", success ? "SUCCESS" : "FAILED", ", channels parsed: ", channelData.size());
-        }
-        else
-        {
-            LOGE("Unknown data format: ", dataFormat);
-        }
-
-        if (success && channelData.size() == numChannels)
-        {
-            LOGD("Channel data validated: ", channelData.size(), " channels (expected: ", numChannels, ")");
-
-            // Log sample data range
-            float minVal = *std::min_element(channelData.begin(), channelData.end());
-            float maxVal = *std::max_element(channelData.begin(), channelData.end());
-            LOGD("Sample data range: [", minVal, ", ", maxVal, "] µV");
-
-            // Prepare timestamp and sample number
-            int64 sampleNumber = currentSampleNumber.fetch_add(1);
-            double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
-            uint64 eventCode = 0;
-
-            LOGD("Adding to buffer: sampleNumber=", sampleNumber, ", timestamp=", timestamp);
-
-            // Add to DataBuffer
-            DataBuffer* buffer = getBufferAddress(0);
-            if (buffer)
-            {
-                LOGD("DataBuffer found, attempting to add data");
-                int written = buffer->addToBuffer(channelData.getRawDataPointer(),
-                                                &sampleNumber,
-                                                &timestamp,
-                                                &eventCode,
-                                                1);
-                success = (written > 0);
-                LOGD("Buffer write result: written=", written, ", success=", success);
-
-                if (success)
-                {
-                    currentSampleNumber++;
-                    if (currentSampleNumber.load() % 1000 == 0) // Log every 1000 samples
-                    {
-                        LOGD("Successfully processed ", currentSampleNumber.load(), " samples total");
-                    }
-                }
-                else
-                {
-                    LOGE("Failed to write to DataBuffer");
-                }
-            }
-            else
-            {
-                LOGE("DataBuffer is null - cannot add data to buffer");
-                success = false;
-            }
-        }
-        else if (!success)
-        {
-            LOGE("Data parsing failed for format: ", dataFormat);
-        }
-        else
-        {
-            LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numChannels);
-        }
+        // Data processing is now handled by the dedicated thread
+        // The success variable indicates whether the data was successfully enqueued
     }
     else
     {
@@ -892,7 +899,7 @@ bool RedisDataThread::updateBufferFromStreams()
     if (reply == nullptr)
     {
         LOGE("XREAD command returned null reply");
-        handleRedisError("XREAD command failed");
+        handleRedisError("XREAD command failed", "");
         return false;
     }
 
@@ -1004,7 +1011,7 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
 
         if (!jsonData.isObject())
         {
-            LOGE("Invalid JSON format: not an object");
+            addError("Invalid JSON format: not an object", "JSON_NOT_OBJECT", 3);
             return false;
         }
         LOGD("JSON is valid object");
@@ -1012,7 +1019,7 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
         // Check for required fields
         if (!jsonData.hasProperty("channels"))
         {
-            LOGE("JSON missing 'channels' property");
+            addError("JSON missing 'channels' property", "JSON_MISSING_CHANNELS", 3);
             LOGD("Available properties: ", JSON::toString(jsonData));
             return false;
         }
@@ -1020,7 +1027,7 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
         var channels = jsonData["channels"];
         if (!channels.isArray())
         {
-            LOGE("Invalid JSON format: 'channels' is not an array");
+            addError("Invalid JSON format: 'channels' is not an array", "JSON_CHANNELS_NOT_ARRAY", 3);
             return false;
         }
 
@@ -1029,8 +1036,21 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
 
         if (channelCount != numChannels)
         {
-            LOGE("Channel count mismatch: JSON has ", channelCount, " channels, expected ", numChannels);
-            return false;
+            String errorMsg = String::formatted("Channel count mismatch: JSON has %d channels, expected %d",
+                channelCount, numChannels);
+            addError(errorMsg, "JSON_CHANNEL_COUNT_MISMATCH", 2);
+
+            // Try to handle gracefully instead of failing completely
+            if (channelCount > numChannels)
+            {
+                addError("Truncating extra channels to match expected count", "JSON_TRUNCATING", 1);
+                channelCount = numChannels; // Truncate
+            }
+            else
+            {
+                addError("Will pad missing channels with zeros", "JSON_PADDING", 1);
+                // Continue with available channels, pad later
+            }
         }
 
         channelData.clear();
@@ -1040,12 +1060,26 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
         float minVal = std::numeric_limits<float>::max();
         float maxVal = std::numeric_limits<float>::lowest();
         int validChannels = 0;
+        int invalidValues = 0;
 
         for (int i = 0; i < channelCount; i++)
         {
             if (channels[i].isDouble() || channels[i].isInt())
             {
                 float value = (float)channels[i];
+
+                // Validate value range
+                if (std::isnan(value) || std::isinf(value))
+                {
+                    addError(String::formatted("Invalid value (NaN/Inf) at channels[%d]", i), "JSON_INVALID_VALUE", 2);
+                    value = 0.0f; // Replace with zero
+                    invalidValues++;
+                }
+                else if (std::abs(value) > 1000000.0f) // Sanity check for extremely large values
+                {
+                    addError(String::formatted("Extremely large value at channels[%d]: %f", i, value), "JSON_LARGE_VALUE", 1);
+                }
+
                 channelData.add(value);
                 validChannels++;
 
@@ -1055,9 +1089,22 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
             }
             else
             {
-                LOGE("Non-numeric value in channels array at index ", i);
-                return false;
+                addError(String::formatted("Non-numeric value in channels array at index %d", i), "JSON_NON_NUMERIC", 2);
+                channelData.add(0.0f); // Add zero for non-numeric values
+                invalidValues++;
+                validChannels++;
             }
+        }
+
+        // Pad with zeros if we have fewer channels than expected
+        while (channelData.size() < numChannels)
+        {
+            channelData.add(0.0f);
+        }
+
+        if (invalidValues > 0)
+        {
+            addError(String::formatted("Replaced %d invalid values with zeros", invalidValues), "JSON_VALUES_REPLACED", 1);
         }
 
         LOGD("Successfully parsed ", validChannels, " channels, range: [", minVal, ", ", maxVal, "]");
@@ -1077,12 +1124,12 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
     }
     catch (const std::exception& e)
     {
-        LOGE("Exception parsing JSON data: ", e.what());
+        addError("Exception parsing JSON data: " + String(e.what()), "JSON_EXCEPTION", 3);
         return false;
     }
     catch (...)
     {
-        LOGE("Unknown exception parsing JSON data");
+        addError("Unknown exception parsing JSON data", "JSON_UNKNOWN_EXCEPTION", 3);
         LOGD("JSON string that failed: ", jsonStr.substring(0, 200), "...");
         return false;
     }
@@ -1262,25 +1309,7 @@ bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& cha
     }
 }
 
-void RedisDataThread::handleRedisError(const String& operation)
-{
-#ifdef REDIS_ENABLED
-    if (redisCtx && redisCtx->err)
-    {
-        LOGE("Redis error in ", operation, ": ", redisCtx->errstr);
 
-        // Try to reconnect on connection errors
-        if (redisCtx->err == REDIS_ERR_IO || redisCtx->err == REDIS_ERR_EOF)
-        {
-            attemptReconnection();
-        }
-    }
-    else
-    {
-        LOGE("Redis error in ", operation, ": unknown error");
-    }
-#endif
-}
 
 
 
@@ -1297,7 +1326,7 @@ bool RedisDataThread::readFromStream(const String& streamName, String& data, Str
         streamName.toRawUTF8(), currentStreamId.toRawUTF8());
 
     if (!reply) {
-        handleRedisError("XREAD command failed");
+        handleRedisError("XREAD command failed", "");
         return false;
     }
 
@@ -1333,24 +1362,805 @@ bool RedisDataThread::readFromStream(const String& streamName, String& data, Str
 #endif
 }
 
+// ============================================================================
+// Enhanced Error Handling Implementation
+// ============================================================================
+
+void RedisDataThread::addError(const String& message, const String& code, int severity)
+{
+    std::lock_guard<std::mutex> lock(errorHistoryMutex);
+
+    ErrorInfo error(message, code, severity);
+    errorHistory.push_back(error);
+
+    // Limit error history size
+    if (errorHistory.size() > 100) {
+        errorHistory.erase(errorHistory.begin());
+    }
+
+    // Log based on severity
+    switch (severity) {
+        case 1: // Info
+            LOGD("Redis Info: ", message, " (", code, ")");
+            break;
+        case 2: // Warning
+            LOGD("Redis Warning: ", message, " (", code, ")");
+            break;
+        case 3: // Error
+            LOGE("Redis Error: ", message, " (", code, ")");
+            break;
+        case 4: // Critical
+            LOGE("Redis Critical: ", message, " (", code, ")");
+            break;
+    }
+}
+
+void RedisDataThread::clearErrors()
+{
+    std::lock_guard<std::mutex> lock(errorHistoryMutex);
+    errorHistory.clear();
+}
+
+std::vector<RedisDataThread::ErrorInfo> RedisDataThread::getRecentErrors(int maxCount) const
+{
+    std::lock_guard<std::mutex> lock(errorHistoryMutex);
+
+    std::vector<ErrorInfo> result;
+    int startIndex = std::max(0, static_cast<int>(errorHistory.size()) - maxCount);
+
+    for (int i = startIndex; i < static_cast<int>(errorHistory.size()); i++) {
+        result.push_back(errorHistory[i]);
+    }
+
+    return result;
+}
+
+String RedisDataThread::getLastErrorMessage() const
+{
+    std::lock_guard<std::mutex> lock(errorHistoryMutex);
+
+    if (errorHistory.empty()) {
+        return "No errors recorded";
+    }
+
+    const auto& lastError = errorHistory.back();
+    return String::formatted("[%s] %s (%s)",
+        lastError.timestamp.toString(true, true).toRawUTF8(),
+        lastError.errorMessage.toRawUTF8(),
+        lastError.errorCode.toRawUTF8());
+}
+
+String RedisDataThread::getConnectionStateString() const
+{
+    switch (currentConnectionState.load()) {
+        case ConnectionState::DISCONNECTED: return "Disconnected";
+        case ConnectionState::CONNECTING: return "Connecting...";
+        case ConnectionState::CONNECTED: return "Connected";
+        case ConnectionState::CONNECTION_FAILED: return "Connection Failed";
+        case ConnectionState::RECONNECTING: return "Reconnecting...";
+        case ConnectionState::AUTHENTICATION_FAILED: return "Authentication Failed";
+        case ConnectionState::TIMEOUT: return "Connection Timeout";
+        default: return "Unknown";
+    }
+}
+
+void RedisDataThread::updateConnectionState(ConnectionState newState)
+{
+    ConnectionState oldState = currentConnectionState.exchange(newState);
+
+    if (oldState != newState) {
+        String stateMsg = String::formatted("Connection state changed: %s → %s",
+            getConnectionStateString().toRawUTF8(),
+            getConnectionStateString().toRawUTF8());
+
+        addError(stateMsg, "STATE_CHANGE", 1); // Info level
+    }
+}
+
+bool RedisDataThread::connectToRedisWithRetry()
+{
+    updateConnectionState(ConnectionState::CONNECTING);
+
+    // Validate configuration first
+    String configError;
+    if (!validateConfiguration(configError)) {
+        addError("Configuration validation failed: " + configError, "CONFIG_ERROR", 3);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        return false;
+    }
+
+    // Attempt connection
+    bool success = connectToRedis(redisHost, redisPort, redisPassword);
+
+    if (success) {
+        updateConnectionState(ConnectionState::CONNECTED);
+        resetRetryState();
+        addError("Successfully connected to Redis", "CONNECT_SUCCESS", 1);
+    } else {
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+
+        if (retryConfig.enableAutoReconnect && currentRetryCount.load() < retryConfig.maxRetries) {
+            scheduleReconnection();
+        }
+    }
+
+    return success;
+}
+
+void RedisDataThread::scheduleReconnection()
+{
+    int retryCount = currentRetryCount.fetch_add(1);
+
+    // Calculate delay with exponential backoff
+    int delay = retryConfig.retryDelayMs * static_cast<int>(std::pow(retryConfig.backoffMultiplier, retryCount));
+    delay = std::min(delay, retryConfig.maxRetryDelayMs);
+
+    nextRetryTime.store(Time::getMillisecondCounterHiRes() + delay);
+
+    addError(String::formatted("Scheduling reconnection attempt %d/%d in %dms",
+        retryCount + 1, retryConfig.maxRetries, delay), "RETRY_SCHEDULED", 2);
+}
+
 bool RedisDataThread::attemptReconnection()
 {
-    LOGD("Attempting to reconnect to Redis...");
+    if (!shouldAttemptReconnect()) {
+        return false;
+    }
 
-    // Disconnect and try to reconnect
-    disconnectFromRedis();
+    updateConnectionState(ConnectionState::RECONNECTING);
 
-    if (connectToRedis(redisHost, redisPort, redisPassword))
-    {
-        LOGD("Redis reconnection successful");
+    addError(String::formatted("Attempting reconnection %d/%d",
+        currentRetryCount.load() + 1, retryConfig.maxRetries), "RECONNECT_ATTEMPT", 1);
+
+    return connectToRedisWithRetry();
+}
+
+bool RedisDataThread::shouldAttemptReconnect() const
+{
+    if (!retryConfig.enableAutoReconnect) {
+        return false;
+    }
+
+    if (currentRetryCount.load() >= retryConfig.maxRetries) {
+        return false;
+    }
+
+    if (currentConnectionState.load() == ConnectionState::CONNECTED) {
+        return false;
+    }
+
+    return Time::getMillisecondCounterHiRes() >= nextRetryTime.load();
+}
+
+void RedisDataThread::resetRetryState()
+{
+    currentRetryCount.store(0);
+    nextRetryTime.store(0);
+}
+
+bool RedisDataThread::validateConfiguration(String& errorMessage) const
+{
+    // Validate host
+    if (!isValidHost(redisHost)) {
+        errorMessage = "Invalid host address: " + redisHost;
+        return false;
+    }
+
+    // Validate port
+    if (!isValidPort(redisPort)) {
+        errorMessage = String::formatted("Invalid port number: %d (must be 1-65535)", redisPort);
+        return false;
+    }
+
+    // Validate channel name
+    if (!isValidChannelName(redisChannel)) {
+        errorMessage = "Invalid channel name: " + redisChannel;
+        return false;
+    }
+
+    // Validate sample rate
+    if (sampleRate <= 0 || sampleRate > 100000) {
+        errorMessage = String::formatted("Invalid sample rate: %.1f (must be > 0 and <= 100000)", sampleRate);
+        return false;
+    }
+
+    // Validate number of channels
+    if (numChannels <= 0 || numChannels > 1024) {
+        errorMessage = String::formatted("Invalid number of channels: %d (must be > 0 and <= 1024)", numChannels);
+        return false;
+    }
+
+    return true;
+}
+
+bool RedisDataThread::isValidHost(const String& host) const
+{
+    if (host.isEmpty()) {
+        return false;
+    }
+
+    // Check for localhost variants
+    if (host == "localhost" || host == "127.0.0.1" || host == "::1") {
         return true;
     }
-    else
-    {
-        LOGE("Redis reconnection failed");
+
+    // Basic IP address validation (IPv4)
+    StringArray parts = StringArray::fromTokens(host, ".", "");
+    if (parts.size() == 4) {
+        for (const String& part : parts) {
+            int value = part.getIntValue();
+            if (value < 0 || value > 255) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Basic hostname validation (allow alphanumeric, dots, hyphens)
+    for (int i = 0; i < host.length(); i++) {
+        juce_wchar c = host[i];
+        if (!CharacterFunctions::isLetterOrDigit(c) && c != '.' && c != '-') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool RedisDataThread::isValidPort(int port) const
+{
+    return port > 0 && port <= 65535;
+}
+
+bool RedisDataThread::isValidChannelName(const String& channel) const
+{
+    if (channel.isEmpty()) {
+        return false;
+    }
+
+    // Redis key names can contain most characters, but avoid problematic ones
+    for (int i = 0; i < channel.length(); i++) {
+        juce_wchar c = channel[i];
+        if (c < 32 || c == 127) { // Control characters
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool RedisDataThread::executeRedisCommand(const String& command, String& result, String& errorMsg)
+{
+#ifdef REDIS_ENABLED
+    if (!redisCtx) {
+        errorMsg = "Redis context is null";
+        return false;
+    }
+
+    redisReply* reply = (redisReply*)redisCommand(redisCtx, command.toRawUTF8());
+
+    if (!reply) {
+        errorMsg = "Redis command failed: " + String(redisCtx->errstr);
+        handleRedisError("executeRedisCommand", errorMsg);
+        return false;
+    }
+
+    bool success = false;
+
+    switch (reply->type) {
+        case REDIS_REPLY_STRING:
+            result = String(reply->str);
+            success = true;
+            break;
+
+        case REDIS_REPLY_INTEGER:
+            result = String(reply->integer);
+            success = true;
+            break;
+
+        case REDIS_REPLY_STATUS:
+            result = String(reply->str);
+            success = true;
+            break;
+
+        case REDIS_REPLY_ERROR:
+            errorMsg = String(reply->str);
+            success = false;
+            break;
+
+        case REDIS_REPLY_NIL:
+            result = "";
+            success = true;
+            break;
+
+        default:
+            errorMsg = "Unexpected reply type: " + String(reply->type);
+            success = false;
+            break;
+    }
+
+    freeReplyObject(reply);
+
+    if (!success) {
+        handleRedisError("executeRedisCommand", errorMsg);
+    }
+
+    return success;
+#else
+    errorMsg = "Redis support not compiled";
+    return false;
+#endif
+}
+
+bool RedisDataThread::testRedisConnection()
+{
+    String result, errorMsg;
+    bool success = executeRedisCommand("PING", result, errorMsg);
+
+    if (success && result == "PONG") {
+        addError("Redis connection test successful", "PING_SUCCESS", 1);
+        return true;
+    } else {
+        addError("Redis connection test failed: " + errorMsg, "PING_FAILED", 3);
         return false;
     }
 }
+
+void RedisDataThread::handleRedisError(const String& operation, const String& details)
+{
+    String errorMsg = String::formatted("Redis operation '%s' failed", operation.toRawUTF8());
+    if (details.isNotEmpty()) {
+        errorMsg += ": " + details;
+    }
+
+    addError(errorMsg, "REDIS_OP_FAILED", 3);
+
+    // Record operation failure for health monitoring
+    recordOperationFailure();
+
+    // Check if we should attempt reconnection
+    if (currentConnectionState.load() == ConnectionState::CONNECTED) {
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+
+        if (retryConfig.enableAutoReconnect) {
+            scheduleReconnection();
+        }
+    }
+}
+
+// Connection health monitoring implementation
+bool RedisDataThread::performConnectionHealthCheck()
+{
+#ifdef REDIS_ENABLED
+    if (!redisCtx || healthCheckInProgress.load()) {
+        return false;
+    }
+
+    healthCheckInProgress.store(true);
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    // Perform PING command to test connection
+    redisReply* reply = (redisReply*)redisCommand(redisCtx, "PING");
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    float latency = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+
+    bool success = false;
+    if (reply != nullptr) {
+        if (reply->type == REDIS_REPLY_STATUS &&
+            String(reply->str) == "PONG") {
+            success = true;
+            recordOperationSuccess();
+            perfMetrics.connectionLatency.store(latency);
+        }
+        freeReplyObject(reply);
+    }
+
+    if (!success) {
+        recordOperationFailure();
+        addError("Health check failed - PING command unsuccessful", "HEALTH_CHECK_FAILED", 2);
+    }
+
+    lastHealthCheck.store(Time::getMillisecondCounterHiRes());
+    healthCheckInProgress.store(false);
+
+    return success;
+#else
+    return false;
+#endif
+}
+
+bool RedisDataThread::shouldPerformHealthCheck() const
+{
+    if (!healthConfig.enableHealthChecks ||
+        currentConnectionState.load() != ConnectionState::CONNECTED) {
+        return false;
+    }
+
+    int64 currentTime = Time::getMillisecondCounterHiRes();
+    int64 timeSinceLastCheck = currentTime - lastHealthCheck.load();
+
+    return timeSinceLastCheck >= healthConfig.healthCheckIntervalMs;
+}
+
+void RedisDataThread::updateConnectionMetrics()
+{
+    // Update connection stability based on recent performance
+    int failures = perfMetrics.consecutiveFailures.load();
+    float stability = 1.0f;
+
+    if (failures > 0) {
+        stability = std::max(0.0f, 1.0f - (failures * 0.2f));
+    }
+
+    perfMetrics.connectionStability.store(stability);
+}
+
+void RedisDataThread::recordOperationLatency(float latencyMs)
+{
+    // Update average latency with exponential moving average
+    float currentAvg = perfMetrics.avgLatency.load();
+    float newAvg = (currentAvg * 0.9f) + (latencyMs * 0.1f);
+    perfMetrics.avgLatency.store(newAvg);
+
+    // Update max latency
+    float currentMax = perfMetrics.maxLatency.load();
+    if (latencyMs > currentMax) {
+        perfMetrics.maxLatency.store(latencyMs);
+    }
+}
+
+void RedisDataThread::recordOperationSuccess()
+{
+    perfMetrics.consecutiveFailures.store(0);
+    perfMetrics.lastSuccessfulOperation.store(Time::getMillisecondCounterHiRes());
+    updateConnectionMetrics();
+}
+
+void RedisDataThread::recordOperationFailure()
+{
+    int failures = perfMetrics.consecutiveFailures.fetch_add(1);
+    updateConnectionMetrics();
+
+    // Log warning if consecutive failures are increasing
+    if (failures >= healthConfig.maxConsecutiveFailures) {
+        addError(String::formatted("High consecutive failure count: %d", failures + 1),
+                "HIGH_FAILURE_RATE", 2);
+    }
+}
+
+// High-performance buffer management implementation
+void RedisDataThread::initializeBufferPool()
+{
+    LOGD("Initializing high-performance buffer pool with ", BUFFER_POOL_SIZE, " packets");
+
+    // Pre-allocate all data packets
+    for (size_t i = 0; i < BUFFER_POOL_SIZE; ++i) {
+        bufferPool[i].channelData.reserve(numChannels);
+        bufferPool[i].reset();
+    }
+
+    // Pre-allocate working buffers
+    workingBuffer.reserve(numChannels);
+    sampleNumberBuffer.reserve(1);
+    timestampBuffer.reserve(1);
+    eventCodeBuffer.reserve(1);
+
+    LOGD("Buffer pool initialized successfully");
+}
+
+RedisDataThread::DataPacket* RedisDataThread::acquireDataPacket()
+{
+    std::lock_guard<std::mutex> lock(poolMutex);
+
+    // Find an available packet using round-robin
+    for (size_t attempts = 0; attempts < BUFFER_POOL_SIZE; ++attempts) {
+        size_t index = (poolIndex.fetch_add(1) % BUFFER_POOL_SIZE);
+        DataPacket* packet = &bufferPool[index];
+
+        if (!packet->inUse) {
+            packet->inUse = true;
+            packet->channelData.clear();
+            packet->channelData.reserve(numChannels);
+            return packet;
+        }
+    }
+
+    // All packets in use - this indicates a performance bottleneck
+    perfMetrics.droppedSamples.fetch_add(1);
+    addError("Buffer pool exhausted - dropping data packet", "BUFFER_POOL_FULL", 2);
+    return nullptr;
+}
+
+void RedisDataThread::releaseDataPacket(DataPacket* packet)
+{
+    if (packet) {
+        std::lock_guard<std::mutex> lock(poolMutex);
+        packet->reset();
+    }
+}
+
+bool RedisDataThread::parseJsonDataOptimized(const char* jsonStr, size_t length, DataPacket* packet)
+{
+    if (!packet) return false;
+
+    auto parseStart = std::chrono::high_resolution_clock::now();
+
+    try {
+        // Use JUCE's JSON parser but with optimized string handling
+        String jsonString(jsonStr, length);
+        var jsonData = JSON::parse(jsonString);
+
+        if (!jsonData.isObject() || !jsonData.hasProperty("channels")) {
+            return false;
+        }
+
+        var channels = jsonData["channels"];
+        if (!channels.isArray()) {
+            return false;
+        }
+
+        // Pre-allocate the exact size needed
+        int channelCount = channels.size();
+        packet->channelData.resize(std::min(channelCount, numChannels));
+
+        // Fast conversion with minimal error checking for performance
+        for (int i = 0; i < packet->channelData.size(); ++i) {
+            var value = channels[i];
+            packet->channelData[i] = (float)value;
+        }
+
+        // Pad with zeros if needed
+        while (packet->channelData.size() < numChannels) {
+            packet->channelData.push_back(0.0f);
+        }
+
+        // Extract timestamp if present
+        if (jsonData.hasProperty("timestamp")) {
+            packet->timestamp = (double)jsonData["timestamp"];
+        } else {
+            packet->timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
+        }
+
+        packet->sampleNumber = currentSampleNumber.load();
+        packet->eventCode = 0;
+
+        auto parseEnd = std::chrono::high_resolution_clock::now();
+        float parseLatency = std::chrono::duration<float, std::milli>(parseEnd - parseStart).count();
+        recordOperationLatency(parseLatency);
+
+        return true;
+
+    } catch (...) {
+        addError("Optimized JSON parsing failed", "JSON_PARSE_OPTIMIZED_FAILED", 3);
+        return false;
+    }
+}
+
+bool RedisDataThread::processDataPacketToBuffer(DataPacket* packet)
+{
+    if (!packet || packet->channelData.empty()) {
+        return false;
+    }
+
+    DataBuffer* buffer = getBufferAddress(0);
+    if (!buffer) {
+        addError("DataBuffer is null", "BUFFER_NULL", 3);
+        return false;
+    }
+
+    // Prepare data for efficient buffer write
+    sampleNumberBuffer.clear();
+    timestampBuffer.clear();
+    eventCodeBuffer.clear();
+
+    sampleNumberBuffer.push_back(packet->sampleNumber);
+    timestampBuffer.push_back(packet->timestamp);
+    eventCodeBuffer.push_back(packet->eventCode);
+
+    // Write to buffer in one operation
+    int written = buffer->addToBuffer(packet->channelData.data(),
+                                    sampleNumberBuffer.data(),
+                                    timestampBuffer.data(),
+                                    eventCodeBuffer.data(),
+                                    1);
+
+    if (written > 0) {
+        currentSampleNumber++;
+        return true;
+    } else {
+        perfMetrics.droppedSamples.fetch_add(1);
+        addError("Failed to write to DataBuffer", "BUFFER_WRITE_FAILED", 3);
+        return false;
+    }
+}
+
+// High-performance multi-threading implementation
+void RedisDataThread::startDataProcessingThread()
+{
+    if (dataProcessingThread && dataProcessingThread->joinable()) {
+        LOGD("Data processing thread already running");
+        return;
+    }
+
+    LOGD("Starting high-performance data processing thread");
+    shouldProcessData.store(true);
+
+    dataProcessingThread = std::make_unique<std::thread>([this]() {
+        dataProcessingLoop();
+    });
+
+    LOGD("Data processing thread started successfully");
+}
+
+void RedisDataThread::stopDataProcessingThread()
+{
+    if (!dataProcessingThread) {
+        return;
+    }
+
+    LOGD("Stopping data processing thread");
+    shouldProcessData.store(false);
+
+    // Wake up the processing thread
+    {
+        std::lock_guard<std::mutex> lock(dataQueueMutex);
+        dataAvailableCondition.notify_all();
+    }
+
+    if (dataProcessingThread->joinable()) {
+        dataProcessingThread->join();
+    }
+
+    dataProcessingThread.reset();
+    LOGD("Data processing thread stopped successfully");
+}
+
+void RedisDataThread::dataProcessingLoop()
+{
+    LOGD("Data processing loop started");
+
+    while (shouldProcessData.load()) {
+        RawDataPacket* rawPacket = nullptr;
+
+        // Wait for data or stop signal
+        {
+            std::unique_lock<std::mutex> lock(dataQueueMutex);
+            dataAvailableCondition.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                return rawQueueCount.load() > 0 || !shouldProcessData.load();
+            });
+        }
+
+        if (!shouldProcessData.load()) {
+            break;
+        }
+
+        // Process available data packets
+        while (dequeueRawData(rawPacket) && rawPacket) {
+            auto processStart = std::chrono::high_resolution_clock::now();
+
+            // Acquire a processed data packet
+            DataPacket* packet = acquireDataPacket();
+            if (!packet) {
+                LOGE("Failed to acquire data packet in processing thread");
+                releaseRawDataPacket(rawPacket);
+                continue;
+            }
+
+            bool success = false;
+
+            // Parse data based on format
+            if (rawPacket->dataFormat == "json") {
+                success = parseJsonDataOptimized(rawPacket->rawData.data(),
+                                               rawPacket->dataLength, packet);
+            } else {
+                // For other formats, fall back to original parsing
+                // TODO: Implement optimized binary and brandbci parsing
+                LOGD("Using fallback parsing for format: ", rawPacket->dataFormat);
+                releaseDataPacket(packet);
+                releaseRawDataPacket(rawPacket);
+                continue;
+            }
+
+            if (success && packet->channelData.size() == numChannels) {
+                // Process to buffer
+                success = processDataPacketToBuffer(packet);
+
+                if (success) {
+                    auto processEnd = std::chrono::high_resolution_clock::now();
+                    float processLatency = std::chrono::duration<float, std::milli>(
+                        processEnd - processStart).count();
+
+                    // Record total latency including network time
+                    auto totalLatency = std::chrono::duration<float, std::milli>(
+                        std::chrono::steady_clock::now() - rawPacket->receiveTime).count();
+                    recordOperationLatency(totalLatency);
+
+                    recordOperationSuccess();
+                } else {
+                    recordOperationFailure();
+                }
+            } else {
+                recordOperationFailure();
+                if (!success) {
+                    LOGE("Data parsing failed in processing thread");
+                } else {
+                    LOGE("Channel count mismatch in processing thread: got ",
+                         packet->channelData.size(), " expected ", numChannels);
+                }
+            }
+
+            // Release packets back to pools
+            releaseDataPacket(packet);
+            releaseRawDataPacket(rawPacket);
+        }
+    }
+
+    LOGD("Data processing loop ended");
+}
+
+bool RedisDataThread::enqueueRawData(const char* data, size_t length, const std::string& format)
+{
+    if (rawQueueCount.load() >= RAW_QUEUE_SIZE) {
+        perfMetrics.droppedSamples.fetch_add(1);
+        addError("Raw data queue full - dropping packet", "RAW_QUEUE_FULL", 2);
+        return false;
+    }
+
+    size_t writeIndex = rawQueueWriteIndex.fetch_add(1) % RAW_QUEUE_SIZE;
+    RawDataPacket* packet = &rawDataQueue[writeIndex];
+
+    if (packet->inUse) {
+        // This shouldn't happen if queue size is adequate
+        perfMetrics.droppedSamples.fetch_add(1);
+        return false;
+    }
+
+    // Copy data efficiently
+    packet->rawData.assign(data, data + length);
+    packet->dataLength = length;
+    packet->dataFormat = format;
+    packet->receiveTime = std::chrono::steady_clock::now();
+    packet->inUse = true;
+
+    rawQueueCount.fetch_add(1);
+
+    // Notify processing thread
+    {
+        std::lock_guard<std::mutex> lock(dataQueueMutex);
+        dataAvailableCondition.notify_one();
+    }
+
+    return true;
+}
+
+bool RedisDataThread::dequeueRawData(RawDataPacket*& packet)
+{
+    if (rawQueueCount.load() == 0) {
+        packet = nullptr;
+        return false;
+    }
+
+    size_t readIndex = rawQueueReadIndex.fetch_add(1) % RAW_QUEUE_SIZE;
+    packet = &rawDataQueue[readIndex];
+
+    if (!packet->inUse) {
+        packet = nullptr;
+        return false;
+    }
+
+    rawQueueCount.fetch_sub(1);
+    return true;
+}
+
+void RedisDataThread::releaseRawDataPacket(RawDataPacket* packet)
+{
+    if (packet) {
+        packet->reset();
+    }
+}
+
+
 
 // Stream management methods
 void RedisDataThread::setStreamMode(bool useStreams)

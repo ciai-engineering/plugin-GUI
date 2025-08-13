@@ -51,7 +51,7 @@ void RedisDataThreadEditor::createConnectionControls()
     // Host
     hostLabel = std::make_unique<Label>("Host Label", "Host:");
     hostLabel->setBounds(10, 30, 50, 20);
-    hostLabel->setFont(Font("Small Text", 12, Font::plain));
+    hostLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(hostLabel.get());
 
     hostEditor = std::make_unique<TextEditor>("Host Editor");
@@ -63,7 +63,7 @@ void RedisDataThreadEditor::createConnectionControls()
     // Port
     portLabel = std::make_unique<Label>("Port Label", "Port:");
     portLabel->setBounds(175, 30, 35, 20);
-    portLabel->setFont(Font("Small Text", 12, Font::plain));
+    portLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(portLabel.get());
 
     portEditor = std::make_unique<TextEditor>("Port Editor");
@@ -75,7 +75,7 @@ void RedisDataThreadEditor::createConnectionControls()
     // Password
     passwordLabel = std::make_unique<Label>("Password Label", "Password:");
     passwordLabel->setBounds(10, 55, 70, 20);
-    passwordLabel->setFont(Font("Small Text", 12, Font::plain));
+    passwordLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(passwordLabel.get());
 
     passwordEditor = std::make_unique<TextEditor>("Password Editor");
@@ -87,7 +87,7 @@ void RedisDataThreadEditor::createConnectionControls()
     // Channel
     channelLabel = std::make_unique<Label>("Channel Label", "Channel:");
     channelLabel->setBounds(10, 80, 60, 20);
-    channelLabel->setFont(Font("Small Text", 12, Font::plain));
+    channelLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(channelLabel.get());
 
     channelEditor = std::make_unique<TextEditor>("Channel Editor");
@@ -102,7 +102,7 @@ void RedisDataThreadEditor::createDataControls()
     // Sample Rate
     sampleRateLabel = std::make_unique<Label>("Sample Rate Label", "Sample Rate:");
     sampleRateLabel->setBounds(10, 110, 80, 20);
-    sampleRateLabel->setFont(Font("Small Text", 12, Font::plain));
+    sampleRateLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(sampleRateLabel.get());
 
     sampleRateEditor = std::make_unique<TextEditor>("Sample Rate Editor");
@@ -114,7 +114,7 @@ void RedisDataThreadEditor::createDataControls()
     // Number of Channels
     numChannelsLabel = std::make_unique<Label>("Num Channels Label", "Channels:");
     numChannelsLabel->setBounds(175, 110, 60, 20);
-    numChannelsLabel->setFont(Font("Small Text", 12, Font::plain));
+    numChannelsLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(numChannelsLabel.get());
 
     numChannelsEditor = std::make_unique<TextEditor>("Num Channels Editor");
@@ -126,7 +126,7 @@ void RedisDataThreadEditor::createDataControls()
     // Data Format
     dataFormatLabel = std::make_unique<Label>("Data Format Label", "Format:");
     dataFormatLabel->setBounds(10, 135, 50, 20);
-    dataFormatLabel->setFont(Font("Small Text", 12, Font::plain));
+    dataFormatLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(dataFormatLabel.get());
 
     dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
@@ -144,7 +144,7 @@ void RedisDataThreadEditor::createDataControls()
     // Stream Pattern
     streamPatternLabel = std::make_unique<Label>("Stream Pattern Label", "Pattern:");
     streamPatternLabel->setBounds(10, 160, 60, 20);
-    streamPatternLabel->setFont(Font("Small Text", 12, Font::plain));
+    streamPatternLabel->setFont(Font(FontOptions("Small Text", 12.0f, Font::plain)));
     addAndMakeVisible(streamPatternLabel.get());
 
     streamPatternEditor = std::make_unique<TextEditor>("Stream Pattern Editor");
@@ -360,29 +360,119 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
     }
 }
 
-void RedisDataThreadEditor::timerCallback()
+bool RedisDataThreadEditor::validateConfiguration()
 {
-    updateConnectionStatus();
+    String errorMessage;
+    bool isValid = dataThread->validateConfiguration(errorMessage);
+
+    if (!isValid)
+    {
+        showValidationError(errorMessage);
+    }
+
+    return isValid;
+}
+
+void RedisDataThreadEditor::showValidationError(const String& message)
+{
+    AlertWindow::showMessageBoxAsync(AlertWindow::WarningIcon,
+                                   "Configuration Error",
+                                   message,
+                                   "OK");
 }
 
 void RedisDataThreadEditor::updateConnectionStatus()
 {
-    String status = dataThread->getConnectionStatus();
-    statusValueLabel->setText(status, dontSendNotification);
-
-    if (dataThread->isConnected())
+    if (statusValueLabel)
     {
-        statusValueLabel->setColour(Label::textColourId, Colours::green);
-        connectButton->setToggleState(true, dontSendNotification);
-        connectButton->setLabel("Disconnect");
+        String statusText = dataThread->getConnectionStateString();
+        statusValueLabel->setText(statusText, dontSendNotification);
+
+        // Update color based on connection state
+        auto state = dataThread->getConnectionState();
+        switch (state)
+        {
+            case RedisDataThread::ConnectionState::CONNECTED:
+                statusValueLabel->setColour(Label::textColourId, Colours::green);
+                break;
+            case RedisDataThread::ConnectionState::CONNECTING:
+            case RedisDataThread::ConnectionState::RECONNECTING:
+                statusValueLabel->setColour(Label::textColourId, Colours::orange);
+                break;
+            case RedisDataThread::ConnectionState::DISCONNECTED:
+                statusValueLabel->setColour(Label::textColourId, Colours::grey);
+                break;
+            default:
+                statusValueLabel->setColour(Label::textColourId, Colours::red);
+                break;
+        }
+    }
+}
+
+void RedisDataThreadEditor::updateErrorDisplay()
+{
+    String lastError = dataThread->getLastErrorMessage();
+    if (lastError == "No errors recorded")
+    {
+        LOGD("No Redis errors to display");
     }
     else
     {
-        statusValueLabel->setColour(Label::textColourId, Colours::red);
-        connectButton->setToggleState(false, dontSendNotification);
-        connectButton->setLabel("Connect");
+        LOGD("Latest Redis error: ", lastError);
     }
 }
+
+void RedisDataThreadEditor::timerCallback()
+{
+    updateConnectionStatus();
+    updatePerformanceDisplay();
+}
+
+void RedisDataThreadEditor::updatePerformanceDisplay()
+{
+    if (statusValueLabel && dataThread->isConnected())
+    {
+        // Get performance metrics
+        float avgLatency = dataThread->getAverageLatency();
+        float stability = dataThread->getConnectionStability();
+        int failures = dataThread->getConsecutiveFailures();
+
+        // Update status text with performance info
+        String statusText = dataThread->getConnectionStateString();
+
+        if (avgLatency > 0)
+        {
+            statusText += String::formatted(" (%.1fms", avgLatency);
+            if (stability < 1.0f)
+            {
+                statusText += String::formatted(", %.0f%%)", stability * 100);
+            }
+            else
+            {
+                statusText += ")";
+            }
+        }
+
+        if (failures > 0)
+        {
+            statusText += String::formatted(" [%d fails]", failures);
+        }
+
+        statusValueLabel->setText(statusText, dontSendNotification);
+
+        // Update color based on performance
+        if (stability < 0.5f || failures >= 3)
+        {
+            statusValueLabel->setColour(Label::textColourId, Colours::orange);
+        }
+        else if (dataThread->getConnectionState() == RedisDataThread::ConnectionState::CONNECTED)
+        {
+            statusValueLabel->setColour(Label::textColourId, Colours::green);
+        }
+    }
+}
+
+
 
 void RedisDataThreadEditor::updateSettings()
 {
