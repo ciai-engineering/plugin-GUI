@@ -111,7 +111,7 @@ bool RedisDataThread::foundInputSource()
     }
 
     // Try to connect to Redis to verify the source is available
-    bool result = connectToRedis(redisHost, redisPort, redisPassword);
+    bool result = connectToRedis(redisHost, redisPort, redisPassword.toStringForAuth());
     LOGD("foundInputSource() connectToRedis result: ", result);
     return result;
 }
@@ -1618,7 +1618,7 @@ bool RedisDataThread::connectToRedisWithRetry()
     }
 
     // Attempt connection
-    bool success = connectToRedis(redisHost, redisPort, redisPassword);
+    bool success = connectToRedis(redisHost, redisPort, redisPassword.toStringForAuth());
 
     if (success) {
         updateConnectionState(ConnectionState::CONNECTED);

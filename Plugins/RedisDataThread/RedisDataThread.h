@@ -380,7 +380,7 @@ public:
     /** Configuration getters */
     String getRedisHost() const { return redisHost; }
     int getRedisPort() const { return redisPort; }
-    String getRedisPassword() const { return redisPassword; }
+    String getRedisPassword() const { return redisPassword.toStringForAuth(); }
     String getRedisChannel() const { return redisChannel; }
     float getSampleRate() const { return sampleRate; }
     int getNumChannels() const { return numChannels; }
