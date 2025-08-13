@@ -36,6 +36,272 @@
 #include <thread>
 #include <unordered_map>
 
+#ifdef REDIS_ENABLED
+/**
+ * RAII wrapper for Redis reply objects to prevent memory leaks
+ */
+class RedisReplyRAII {
+private:
+    redisReply* reply_;
+
+public:
+    explicit RedisReplyRAII(redisReply* reply) : reply_(reply) {}
+
+    ~RedisReplyRAII() {
+        if (reply_) {
+            freeReplyObject(reply_);
+        }
+    }
+
+    redisReply* get() const { return reply_; }
+    redisReply* operator->() const { return reply_; }
+    redisReply& operator*() const { return *reply_; }
+    bool isValid() const { return reply_ != nullptr; }
+    bool hasError() const { return reply_ && reply_->type == REDIS_REPLY_ERROR; }
+
+    // Non-copyable, movable
+    RedisReplyRAII(const RedisReplyRAII&) = delete;
+    RedisReplyRAII& operator=(const RedisReplyRAII&) = delete;
+
+    RedisReplyRAII(RedisReplyRAII&& other) noexcept : reply_(other.reply_) {
+        other.reply_ = nullptr;
+    }
+
+    RedisReplyRAII& operator=(RedisReplyRAII&& other) noexcept {
+        if (this != &other) {
+            if (reply_) {
+                freeReplyObject(reply_);
+            }
+            reply_ = other.reply_;
+            other.reply_ = nullptr;
+        }
+        return *this;
+    }
+};
+
+/**
+ * RAII wrapper for Redis context to ensure proper cleanup and exception safety
+ */
+class RedisContextRAII {
+private:
+    redisContext* ctx_;
+
+public:
+    RedisContextRAII() : ctx_(nullptr) {}
+
+    explicit RedisContextRAII(const char* host, int port, const timeval& timeout)
+        : ctx_(redisConnectWithTimeout(host, port, timeout)) {}
+
+    ~RedisContextRAII() {
+        if (ctx_) {
+            redisFree(ctx_);
+        }
+    }
+
+    redisContext* get() const { return ctx_; }
+    redisContext* operator->() const { return ctx_; }
+    redisContext& operator*() const { return *ctx_; }
+    bool isValid() const { return ctx_ && !ctx_->err; }
+    bool hasError() const { return ctx_ && ctx_->err; }
+    const char* getErrorString() const { return ctx_ ? ctx_->errstr : "null context"; }
+    int getErrorCode() const { return ctx_ ? ctx_->err : -1; }
+
+    // Release ownership of the context
+    redisContext* release() {
+        redisContext* temp = ctx_;
+        ctx_ = nullptr;
+        return temp;
+    }
+
+    // Reset with new context
+    void reset(redisContext* newCtx = nullptr) {
+        if (ctx_) {
+            redisFree(ctx_);
+        }
+        ctx_ = newCtx;
+    }
+
+    // Non-copyable, movable
+    RedisContextRAII(const RedisContextRAII&) = delete;
+    RedisContextRAII& operator=(const RedisContextRAII&) = delete;
+
+    RedisContextRAII(RedisContextRAII&& other) noexcept : ctx_(other.ctx_) {
+        other.ctx_ = nullptr;
+    }
+
+    RedisContextRAII& operator=(RedisContextRAII&& other) noexcept {
+        if (this != &other) {
+            if (ctx_) {
+                redisFree(ctx_);
+            }
+            ctx_ = other.ctx_;
+            other.ctx_ = nullptr;
+        }
+        return *this;
+    }
+};
+
+/**
+ * Optimized string utilities to reduce unnecessary copies
+ */
+namespace StringUtils {
+    // Fast string comparison without creating String objects
+    inline bool equals(const char* str, size_t len, const char* target) {
+        size_t targetLen = strlen(target);
+        return len == targetLen && memcmp(str, target, len) == 0;
+    }
+
+    // Create String only when necessary, with length hint
+    inline String createString(const char* str, size_t len) {
+        return String(str, len);
+    }
+
+    // Fast string view for temporary operations
+    struct StringView {
+        const char* data;
+        size_t length;
+
+        StringView(const char* str, size_t len) : data(str), length(len) {}
+        StringView(const char* str) : data(str), length(strlen(str)) {}
+
+        bool equals(const char* target) const {
+            size_t targetLen = strlen(target);
+            return length == targetLen && memcmp(data, target, length) == 0;
+        }
+
+        bool startsWith(const char* prefix) const {
+            size_t prefixLen = strlen(prefix);
+            return length >= prefixLen && memcmp(data, prefix, prefixLen) == 0;
+        }
+
+        String toString() const {
+            return String(data, length);
+        }
+    };
+}
+
+/**
+ * Secure string class for sensitive data like passwords
+ * Automatically clears memory on destruction and provides secure operations
+ */
+class SecureString {
+private:
+    std::vector<char> data_;
+    bool isValid_;
+
+    // Secure memory clearing function
+    void secureClear() {
+        if (!data_.empty()) {
+            // Use volatile to prevent compiler optimization
+            volatile char* ptr = data_.data();
+            for (size_t i = 0; i < data_.size(); ++i) {
+                ptr[i] = 0;
+            }
+            data_.clear();
+        }
+        isValid_ = false;
+    }
+
+public:
+    SecureString() : isValid_(false) {}
+
+    explicit SecureString(const String& str) : isValid_(false) {
+        if (str.isNotEmpty()) {
+            data_.resize(str.length() + 1);
+            str.copyToUTF8(data_.data(), data_.size());
+            data_[str.length()] = '\0';
+            isValid_ = true;
+        }
+    }
+
+    explicit SecureString(const char* str) : isValid_(false) {
+        if (str && strlen(str) > 0) {
+            size_t len = strlen(str);
+            data_.resize(len + 1);
+            memcpy(data_.data(), str, len);
+            data_[len] = '\0';
+            isValid_ = true;
+        }
+    }
+
+    ~SecureString() {
+        secureClear();
+    }
+
+    // Non-copyable to prevent accidental password duplication
+    SecureString(const SecureString&) = delete;
+    SecureString& operator=(const SecureString&) = delete;
+
+    // Movable for efficiency
+    SecureString(SecureString&& other) noexcept
+        : data_(std::move(other.data_)), isValid_(other.isValid_) {
+        other.isValid_ = false;
+    }
+
+    SecureString& operator=(SecureString&& other) noexcept {
+        if (this != &other) {
+            secureClear();
+            data_ = std::move(other.data_);
+            isValid_ = other.isValid_;
+            other.isValid_ = false;
+        }
+        return *this;
+    }
+
+    const char* c_str() const {
+        return isValid_ && !data_.empty() ? data_.data() : "";
+    }
+
+    bool isEmpty() const {
+        return !isValid_ || data_.empty() || data_[0] == '\0';
+    }
+
+    bool isNotEmpty() const {
+        return !isEmpty();
+    }
+
+    size_t length() const {
+        return isValid_ && !data_.empty() ? strlen(data_.data()) : 0;
+    }
+
+    // Secure comparison to prevent timing attacks
+    bool equals(const SecureString& other) const {
+        if (!isValid_ || !other.isValid_) {
+            return !isValid_ && !other.isValid_;
+        }
+
+        size_t len1 = length();
+        size_t len2 = other.length();
+
+        // Always compare the same number of bytes to prevent timing attacks
+        size_t maxLen = std::max(len1, len2);
+        if (maxLen == 0) return true;
+
+        int result = 0;
+        for (size_t i = 0; i < maxLen; ++i) {
+            char c1 = (i < len1) ? data_[i] : 0;
+            char c2 = (i < len2) ? other.data_[i] : 0;
+            result |= (c1 ^ c2);
+        }
+
+        return result == 0 && len1 == len2;
+    }
+
+    // Clear the password from memory
+    void clear() {
+        secureClear();
+    }
+
+    // Create a temporary String for Redis operations (use sparingly)
+    String toStringForAuth() const {
+        if (!isValid_ || data_.empty()) {
+            return String();
+        }
+        return String(data_.data());
+    }
+};
+#endif
+
 class SourceNode;
 
 /**
@@ -84,6 +350,7 @@ public:
 
     /** Redis connection management */
     bool connectToRedis(const String& host, int port, const String& password = "");
+    bool reconnectToRedis(); // Reconnect using stored credentials
     void disconnectFromRedis();
     bool isConnected() const;
 
@@ -98,6 +365,10 @@ public:
     void setSampleRate(float sampleRate);
     void setNumChannels(int numChannels);
     void setDataFormat(const String& format);
+
+    // Secure password operations
+    bool hasPassword() const;
+    void clearPassword();
 
     /** Stream support methods */
     void setStreamMode(bool useStreams);
@@ -123,7 +394,7 @@ public:
 
 private:
 #ifdef REDIS_ENABLED
-    redisContext* redisCtx;
+    RedisContextRAII redisCtx;
 #else
     void* redisCtx; // placeholder when Redis is not available
 #endif
@@ -131,7 +402,7 @@ private:
     // Connection parameters
     String redisHost;
     int redisPort;
-    String redisPassword;
+    SecureString redisPassword; // Use secure string for password storage
     String redisChannel;
 
     // Data configuration
@@ -149,6 +420,9 @@ private:
     // State management
     std::atomic<bool> isAcquiring;
     std::atomic<bool> connectionStatus;
+    mutable std::mutex connectionMutex; // For thread-safe connection management
+    mutable std::mutex configMutex; // For thread-safe configuration changes
+    mutable std::mutex streamMutex; // For thread-safe stream management
 
     // Sample counting
     std::atomic<int64> currentSampleNumber;
@@ -213,6 +487,9 @@ private:
     std::vector<int64> sampleNumberBuffer;
     std::vector<double> timestampBuffer;
     std::vector<uint64> eventCodeBuffer;
+
+    // Optimized string buffer for reducing allocations
+    mutable std::string stringBuffer; // Reusable string buffer for temporary operations
 
     // High-performance multi-threading
     struct RawDataPacket {
@@ -360,7 +637,11 @@ public:
     bool updateBufferFromStreams();
     bool updateBufferFromList(); // Legacy BLPOP method
     bool readFromStream(const String& streamName, String& data, String& newId);
+#ifdef REDIS_ENABLED
     bool processStreamEntry(redisReply* fieldsReply);
+#else
+    bool processStreamEntry(void* fieldsReply);
+#endif
 
     // Error handling
     void handleRedisError(const String& operation);

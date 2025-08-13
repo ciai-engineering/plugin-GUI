@@ -26,7 +26,11 @@
 
 RedisDataThread::RedisDataThread(SourceNode* sn)
     : DataThread(sn)
+#ifdef REDIS_ENABLED
+    , redisCtx()
+#else
     , redisCtx(nullptr)
+#endif
     , redisHost("localhost")
     , redisPort(6379)
     , redisChannel("neural_data_primary")
@@ -49,7 +53,11 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     LOGD("  - Sample Rate: ", sampleRate);
     LOGD("  - Stream Mode: ", useStreamMode ? "ENABLED" : "DISABLED");
     LOGD("  - Stream Pattern: ", streamPattern);
+#ifdef REDIS_ENABLED
+    LOGD("  - Redis context: ", (redisCtx.isValid() ? "initialized" : "null"));
+#else
     LOGD("  - Redis context: ", (redisCtx ? "initialized" : "null"));
+#endif
     LOGD("  - Acquiring: ", isAcquiring.load());
     LOGD("  - Connected: ", connectionStatus.load());
 
@@ -79,9 +87,10 @@ RedisDataThread::~RedisDataThread()
         stopAcquisition();
     }
 
-
-
     disconnectFromRedis();
+
+    // Securely clear password from memory
+    redisPassword.clear();
 
     LOGD("✅ RedisDataThread destroyed");
 }
@@ -115,8 +124,11 @@ bool RedisDataThread::isReady()
 bool RedisDataThread::connectToRedis(const String& host, int port, const String& password)
 {
 #ifdef REDIS_ENABLED
-    LOGD("Attempting to connect to Redis server: ", host, ":", port);
-    updateConnectionState(ConnectionState::CONNECTING);
+    try {
+        std::lock_guard<std::mutex> lock(connectionMutex);
+
+        LOGD("Attempting to connect to Redis server: ", host, ":", port);
+        updateConnectionState(ConnectionState::CONNECTING);
 
     // Disconnect existing connection
     if (connectionStatus.load())
@@ -128,24 +140,16 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     // Create new connection with timeout
     LOGD("Creating Redis connection context");
     struct timeval timeout = { 2, 0 }; // 2 seconds timeout
-    redisCtx = redisConnectWithTimeout(host.toRawUTF8(), port, timeout);
 
-    if (redisCtx == nullptr)
-    {
-        addError("Failed to allocate Redis context", "ALLOC_FAILED", 4);
-        updateConnectionState(ConnectionState::CONNECTION_FAILED);
-        connectionStatus = false;
-        return false;
-    }
+    // Create new context using RAII wrapper
+    RedisContextRAII newCtx(host.toRawUTF8(), port, timeout);
 
-    if (redisCtx->err)
+    if (!newCtx.isValid())
     {
-        String errorMsg = String::formatted("Redis connection failed: %s (error code: %d)",
-            redisCtx->errstr, redisCtx->err);
+        // Optimize: Build error message without String::formatted for simple cases
+        String errorMsg = "Redis connection failed: " + String(newCtx.getErrorString()) +
+                         " (error code: " + String(newCtx.getErrorCode()) + ")";
         addError(errorMsg, "CONNECT_ERROR", 3);
-
-        redisFree(redisCtx);
-        redisCtx = nullptr;
         updateConnectionState(ConnectionState::CONNECTION_FAILED);
         connectionStatus = false;
         return false;
@@ -155,20 +159,26 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 
     // Set socket timeout for operations
     struct timeval tv = { 1, 0 }; // 1 second timeout for operations
-    redisSetTimeout(redisCtx, tv);
+    redisSetTimeout(newCtx.get(), tv);
 
     // Authenticate if password is provided
     if (password.isNotEmpty())
     {
         LOGD("Authenticating with Redis using provided password");
         String result, errorMsg;
-        bool authSuccess = executeRedisCommand("AUTH " + password, result, errorMsg);
+
+        // Use secure password handling for authentication
+        SecureString securePassword(password);
+        String authCommand = "AUTH " + securePassword.toStringForAuth();
+        bool authSuccess = executeRedisCommand(authCommand, result, errorMsg);
+
+        // Clear the temporary auth command from memory
+        authCommand = String(); // Clear the command string
 
         if (!authSuccess)
         {
             addError("Redis authentication failed: " + errorMsg, "AUTH_FAILED", 3);
             updateConnectionState(ConnectionState::AUTHENTICATION_FAILED);
-            disconnectFromRedis();
             return false;
         }
 
@@ -191,47 +201,43 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     // Test channel access based on mode
     LOGD("Testing access to Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
-    redisReply* testReply = nullptr;
+#ifdef REDIS_ENABLED
     if (useStreamMode)
     {
         // For stream mode, check if key exists and is a stream
-        testReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", redisChannel.toRawUTF8());
-        if (testReply && testReply->type == REDIS_REPLY_STATUS)
+        RedisReplyRAII testReply((redisReply*)redisCommand(newCtx.get(), "TYPE %s", redisChannel.toRawUTF8()));
+        if (testReply.isValid() && testReply->type == REDIS_REPLY_STATUS)
         {
-            String keyType(testReply->str);
-            if (keyType == "stream")
+            // Optimize: Use string view to avoid unnecessary String creation
+            StringUtils::StringView keyType(testReply->str, testReply->len);
+            if (keyType.equals("stream"))
             {
                 LOGD("Redis stream '", redisChannel, "' found and accessible");
             }
-            else if (keyType == "none")
+            else if (keyType.equals("none"))
             {
                 LOGD("Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
             }
             else
             {
-                LOGE("Redis key '", redisChannel, "' exists but is not a stream (type: ", keyType, ")");
-                freeReplyObject(testReply);
-                disconnectFromRedis();
+                LOGE("Redis key '", redisChannel, "' exists but is not a stream (type: ", keyType.toString(), ")");
                 return false;
             }
         }
         else
         {
             LOGE("Cannot check Redis key type for '", redisChannel, "'");
-            if (testReply) freeReplyObject(testReply);
-            disconnectFromRedis();
             return false;
         }
     }
     else
     {
         // For list mode, use LLEN
-        testReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
-        if (testReply == nullptr || testReply->type == REDIS_REPLY_ERROR)
+        RedisReplyRAII testReply((redisReply*)redisCommand(newCtx.get(), "LLEN %s", redisChannel.toRawUTF8()));
+        if (!testReply.isValid() || testReply->type == REDIS_REPLY_ERROR)
         {
-            LOGE("Cannot access Redis channel '", redisChannel, "': ", (testReply && testReply->str) ? testReply->str : "unknown error");
-            if (testReply) freeReplyObject(testReply);
-            disconnectFromRedis();
+            LOGE("Cannot access Redis channel '", redisChannel, "': ",
+                 (testReply.isValid() && testReply->str) ? testReply->str : "unknown error");
             return false;
         }
         else
@@ -241,18 +247,46 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         }
     }
 
-    if (testReply) freeReplyObject(testReply);
+    // Connection successful - move the context to our member variable
+    redisCtx = std::move(newCtx);
+#endif
 
     // Save connection parameters
     redisHost = host;
     redisPort = port;
-    redisPassword = password;
+    // Store password securely
+    redisPassword.clear();
+    if (password.isNotEmpty()) {
+        redisPassword = SecureString(password);
+    }
     connectionStatus = true;
 
-    LOGD("✓ Successfully connected to Redis server: ", host, ":", port);
-    LOGD("✓ Redis connection status set to TRUE");
-    LOGD("✓ Channel: ", redisChannel, ", Format: ", dataFormat, ", Channels: ", numChannels, ", Sample Rate: ", sampleRate);
-    return true;
+        LOGD("✓ Successfully connected to Redis server: ", host, ":", port);
+        LOGD("✓ Redis connection status set to TRUE");
+        LOGD("✓ Channel: ", redisChannel, ", Format: ", dataFormat, ", Channels: ", numChannels, ", Sample Rate: ", sampleRate);
+        return true;
+
+    } catch (const std::bad_alloc& e) {
+        addError("Memory allocation failed during Redis connection: " + String(e.what()), "CONNECT_MEMORY_ERROR", 4);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        connectionStatus.store(false);
+        return false;
+    } catch (const std::runtime_error& e) {
+        addError("Runtime error during Redis connection: " + String(e.what()), "CONNECT_RUNTIME_ERROR", 3);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        connectionStatus.store(false);
+        return false;
+    } catch (const std::exception& e) {
+        addError("Exception during Redis connection: " + String(e.what()), "CONNECT_EXCEPTION", 3);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        connectionStatus.store(false);
+        return false;
+    } catch (...) {
+        addError("Unknown exception during Redis connection", "CONNECT_UNKNOWN_EXCEPTION", 3);
+        updateConnectionState(ConnectionState::CONNECTION_FAILED);
+        connectionStatus.store(false);
+        return false;
+    }
 #else
     LOGE("Redis support not compiled. Install hiredis library and recompile.");
     LOGE("To enable Redis: install libhiredis-dev and recompile with REDIS_ENABLED=1");
@@ -263,52 +297,65 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 void RedisDataThread::disconnectFromRedis()
 {
 #ifdef REDIS_ENABLED
-    if (redisCtx)
-    {
-        redisFree(redisCtx);
-        redisCtx = nullptr;
-    }
+    std::lock_guard<std::mutex> lock(connectionMutex);
+    redisCtx.reset(); // RAII wrapper automatically handles cleanup
 #endif
-    connectionStatus = false;
+    connectionStatus.store(false);
 }
 
 bool RedisDataThread::isConnected() const
 {
+#ifdef REDIS_ENABLED
+    std::lock_guard<std::mutex> lock(connectionMutex);
+    return connectionStatus.load() && redisCtx.isValid();
+#else
     return connectionStatus.load();
+#endif
 }
 
 void RedisDataThread::setRedisHost(const String& host)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     redisHost = host;
 }
 
 void RedisDataThread::setRedisPort(int port)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     redisPort = port;
 }
 
 void RedisDataThread::setRedisPassword(const String& password)
 {
-    redisPassword = password;
+    std::lock_guard<std::mutex> lock(configMutex);
+    // Clear old password and set new one securely
+    redisPassword.clear();
+    if (password.isNotEmpty()) {
+        redisPassword = SecureString(password);
+    }
 }
 
 void RedisDataThread::setRedisChannel(const String& channel)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     redisChannel = channel;
 }
 
 void RedisDataThread::setSampleRate(float rate)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     sampleRate = rate;
 }
 
 void RedisDataThread::setNumChannels(int channels)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     numChannels = channels;
 }
 
 void RedisDataThread::setDataFormat(const String& format)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     dataFormat = format;
 
     // Auto-enable stream mode for BRANDBCI format
@@ -319,8 +366,49 @@ void RedisDataThread::setDataFormat(const String& format)
     }
 }
 
+bool RedisDataThread::hasPassword() const
+{
+    std::lock_guard<std::mutex> lock(configMutex);
+    return redisPassword.isNotEmpty();
+}
+
+void RedisDataThread::clearPassword()
+{
+    std::lock_guard<std::mutex> lock(configMutex);
+    redisPassword.clear();
+    LOGD("Redis password cleared from memory");
+}
+
+bool RedisDataThread::reconnectToRedis()
+{
+    std::lock_guard<std::mutex> lock(configMutex);
+
+    LOGD("Attempting to reconnect to Redis using stored credentials");
+
+    // Use stored credentials for reconnection
+    String password;
+    if (redisPassword.isNotEmpty()) {
+        // Temporarily create String for connection - will be cleared after use
+        password = redisPassword.toStringForAuth();
+    }
+
+    bool success = connectToRedis(redisHost, redisPort, password);
+
+    // Clear the temporary password string
+    password = String();
+
+    if (success) {
+        LOGD("Reconnection to Redis successful");
+    } else {
+        LOGE("Reconnection to Redis failed");
+    }
+
+    return success;
+}
+
 String RedisDataThread::getConnectionStatus() const
 {
+    std::lock_guard<std::mutex> configLock(configMutex);
     if (connectionStatus.load())
     {
         return "Connected to " + redisHost + ":" + String(redisPort);
@@ -336,7 +424,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     Array<String> records;
 
 #ifdef REDIS_ENABLED
-    if (!connectionStatus.load() || redisCtx == nullptr)
+    if (!connectionStatus.load() || !redisCtx.isValid())
     {
         LOGE("Cannot retrieve data: Redis not connected");
         return records;
@@ -344,13 +432,13 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
 
     LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
-    redisReply* reply = nullptr;
+    RedisReplyRAII reply(nullptr);
 
     if (useStreamMode)
     {
         // For streams, use XREVRANGE to get latest entries
-        reply = (redisReply*)redisCommand(redisCtx,
-            "XREVRANGE %s + - COUNT %d", redisChannel.toRawUTF8(), numRecords);
+        reply = RedisReplyRAII((redisReply*)redisCommand(redisCtx.get(),
+            "XREVRANGE %s + - COUNT %d", redisChannel.toRawUTF8(), numRecords));
     }
     else
     {
@@ -360,11 +448,11 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         int startIndex = -(numRecords);
         int stopIndex = -1;
 
-        reply = (redisReply*)redisCommand(redisCtx,
-            "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex);
+        reply = RedisReplyRAII((redisReply*)redisCommand(redisCtx.get(),
+            "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex));
     }
 
-    if (reply == nullptr)
+    if (!reply.isValid())
     {
         LOGE("Redis command returned null reply");
         handleRedisError("Redis command failed", "");
@@ -395,11 +483,12 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
                         {
                             if (j + 1 < fieldsReply->elements &&
                                 fieldsReply->element[j]->type == REDIS_REPLY_STRING &&
-                                String(fieldsReply->element[j]->str) == "brandbci_data")
+                                StringUtils::StringView(fieldsReply->element[j]->str, fieldsReply->element[j]->len).equals("brandbci_data"))
                             {
-                                String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
-                                records.add(record);
-                                LOGD("Stream record ", i, " length: ", record.length(), " bytes");
+                                // Optimize: Create String only once for the record
+                                String record = StringUtils::createString(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                records.add(std::move(record)); // Use move to avoid copy
+                                LOGD("Stream record ", i, " length: ", fieldsReply->element[j + 1]->len, " bytes");
                                 break;
                             }
                         }
@@ -416,9 +505,10 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
             {
                 if (reply->element[i]->type == REDIS_REPLY_STRING)
                 {
-                    String record(reply->element[i]->str, reply->element[i]->len);
-                    records.add(record);
-                    LOGD("List record ", i, " length: ", record.length(), " bytes");
+                    // Optimize: Use move semantics to avoid copy
+                    String record = StringUtils::createString(reply->element[i]->str, reply->element[i]->len);
+                    records.add(std::move(record));
+                    LOGD("List record ", i, " length: ", reply->element[i]->len, " bytes");
                 }
             }
         }
@@ -431,8 +521,6 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     {
         LOGE("Unexpected Redis reply type: ", reply->type);
     }
-
-    freeReplyObject(reply);
 
 #else
     LOGE("Redis not compiled - REDIS_ENABLED not defined");
@@ -473,18 +561,16 @@ bool RedisDataThread::startAcquisition()
     // Test Redis connection before starting
     LOGD("Testing Redis connection before starting acquisition...");
 #ifdef REDIS_ENABLED
-    if (redisCtx)
+    if (redisCtx.isValid())
     {
-        redisReply* testReply = (redisReply*)redisCommand(redisCtx, "PING");
-        if (testReply && testReply->type != REDIS_REPLY_ERROR)
+        RedisReplyRAII testReply((redisReply*)redisCommand(redisCtx.get(), "PING"));
+        if (testReply.isValid() && testReply->type != REDIS_REPLY_ERROR)
         {
             LOGD("✓ Redis PING test successful");
-            freeReplyObject(testReply);
         }
         else
         {
             LOGE("❌ Redis PING test failed");
-            if (testReply) freeReplyObject(testReply);
             return false;
         }
 
@@ -492,36 +578,31 @@ bool RedisDataThread::startAcquisition()
         if (useStreamMode)
         {
             // For streams, check if stream exists and has data
-            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "XLEN %s", redisChannel.toRawUTF8());
-            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+            RedisReplyRAII lenReply((redisReply*)redisCommand(redisCtx.get(), "XLEN %s", redisChannel.toRawUTF8()));
+            if (lenReply.isValid() && lenReply->type == REDIS_REPLY_INTEGER)
             {
                 LOGD("✓ Redis stream '", redisChannel, "' has ", lenReply->integer, " entries available");
-                freeReplyObject(lenReply);
             }
-            else if (lenReply && lenReply->type == REDIS_REPLY_ERROR)
+            else if (lenReply.isValid() && lenReply->type == REDIS_REPLY_ERROR)
             {
                 LOGD("✓ Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
-                freeReplyObject(lenReply);
             }
             else
             {
                 LOGE("❌ Cannot check Redis stream length");
-                if (lenReply) freeReplyObject(lenReply);
             }
         }
         else
         {
             // For lists, use LLEN
-            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
-            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+            RedisReplyRAII lenReply((redisReply*)redisCommand(redisCtx.get(), "LLEN %s", redisChannel.toRawUTF8()));
+            if (lenReply.isValid() && lenReply->type == REDIS_REPLY_INTEGER)
             {
                 LOGD("✓ Redis channel '", redisChannel, "' has ", lenReply->integer, " samples available");
-                freeReplyObject(lenReply);
             }
             else
             {
                 LOGE("❌ Cannot check Redis channel length");
-                if (lenReply) freeReplyObject(lenReply);
             }
         }
     }
@@ -636,17 +717,18 @@ void RedisDataThread::resizeBuffers()
 
 bool RedisDataThread::updateBuffer()
 {
-    static int64 lastLogTime = 0;
-    static int64 samplesProcessed = 0;
-    static int64 lastSampleCount = 0;
-    static int64 callCount = 0;
+    try {
+        static int64 lastLogTime = 0;
+        static int64 samplesProcessed = 0;
+        static int64 lastSampleCount = 0;
+        static int64 callCount = 0;
 
-    callCount++;
+        callCount++;
 
-    // Log every call for the first 10 calls, then every 100 calls
-    if (callCount <= 10 || callCount % 100 == 0) {
-        LOGD("🔄 updateBuffer() called #", callCount, " - acquiring: ", isAcquiring.load(), ", connected: ", connectionStatus.load());
-    }
+        // Log every call for the first 10 calls, then every 100 calls
+        if (callCount <= 10 || callCount % 100 == 0) {
+            LOGD("🔄 updateBuffer() called #", callCount, " - acquiring: ", isAcquiring.load(), ", connected: ", connectionStatus.load());
+        }
 
     // Check acquisition state
     if (!isAcquiring.load())
@@ -723,17 +805,33 @@ bool RedisDataThread::updateBuffer()
     float operationLatency = std::chrono::duration<float, std::milli>(operationEnd - operationStart).count();
     recordOperationLatency(operationLatency);
 
-    if (result) {
-        samplesProcessed++;
-        recordOperationSuccess();
-        perfMetrics.totalSamplesProcessed.fetch_add(1);
-    } else {
+        if (result) {
+            samplesProcessed++;
+            recordOperationSuccess();
+            perfMetrics.totalSamplesProcessed.fetch_add(1);
+        } else {
+            recordOperationFailure();
+        }
+
+        return result;
+
+    } catch (const std::bad_alloc& e) {
+        addError("Memory allocation failed in updateBuffer: " + String(e.what()), "UPDATE_BUFFER_MEMORY_ERROR", 4);
         recordOperationFailure();
+        return false;
+    } catch (const std::runtime_error& e) {
+        addError("Runtime error in updateBuffer: " + String(e.what()), "UPDATE_BUFFER_RUNTIME_ERROR", 3);
+        recordOperationFailure();
+        return false;
+    } catch (const std::exception& e) {
+        addError("Exception in updateBuffer: " + String(e.what()), "UPDATE_BUFFER_EXCEPTION", 3);
+        recordOperationFailure();
+        return false;
+    } catch (...) {
+        addError("Unknown exception in updateBuffer", "UPDATE_BUFFER_UNKNOWN_EXCEPTION", 3);
+        recordOperationFailure();
+        return false;
     }
-
-    return result;
-
-    return false; // This should not be reached
 #else
     LOGE("Redis not compiled - REDIS_ENABLED not defined");
     return false;
@@ -747,10 +845,10 @@ bool RedisDataThread::updateBufferFromList()
     LOGD("Executing BLPOP command on channel: ", redisChannel);
 
     // Get data from Redis (blocking call with 1 second timeout)
-    redisReply* reply = (redisReply*)redisCommand(redisCtx,
-        "BLPOP %s 1", redisChannel.toRawUTF8());
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(),
+        "BLPOP %s 1", redisChannel.toRawUTF8()));
 
-    if (reply == nullptr)
+    if (!reply.isValid())
     {
         LOGE("BLPOP command returned null reply");
         handleRedisError("BLPOP command failed", "");
@@ -763,7 +861,6 @@ bool RedisDataThread::updateBufferFromList()
     {
         // Timeout, no data available
         LOGD("BLPOP timeout - no data available in Redis channel");
-        freeReplyObject(reply);
         return true; // Not an error
     }
 
@@ -790,8 +887,6 @@ bool RedisDataThread::updateBufferFromList()
     {
         LOGE("Unexpected BLPOP reply format: type=", reply->type, ", elements=", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
     }
-
-    freeReplyObject(reply);
     LOGD("updateBufferFromList returning: ", success);
     return success;
 #else
@@ -803,100 +898,110 @@ bool RedisDataThread::updateBufferFromList()
 bool RedisDataThread::updateBufferFromStreams()
 {
 #ifdef REDIS_ENABLED
-    if (activeStreams.size() == 0)
+    // Check active streams with thread safety
     {
-        LOGD("No active streams - discovering streams with pattern: ", streamPattern);
-        Array<String> discoveredStreams = discoverStreams(streamPattern);
-        LOGD("Stream discovery found ", discoveredStreams.size(), " streams");
-
-        for (int i = 0; i < discoveredStreams.size(); i++)
-        {
-            LOGD("Subscribing to discovered stream: ", discoveredStreams[i]);
-            subscribeToStream(discoveredStreams[i]);
-        }
-
+        std::lock_guard<std::mutex> lock(streamMutex);
         if (activeStreams.size() == 0)
         {
-            LOGD("No streams found matching pattern: ", streamPattern);
-            LOGD("This could mean:");
-            LOGD("  1. No streams exist in Redis with pattern: ", streamPattern);
-            LOGD("  2. Redis connection issue");
-            LOGD("  3. Stream discovery function failed");
-            return true; // Not an error, just no data available
-        }
-        else
-        {
-            LOGD("Successfully subscribed to ", activeStreams.size(), " streams");
+            LOGD("No active streams - discovering streams with pattern: ", streamPattern);
+            Array<String> discoveredStreams = discoverStreams(streamPattern);
+            LOGD("Stream discovery found ", discoveredStreams.size(), " streams");
+
+            for (int i = 0; i < discoveredStreams.size(); i++)
+            {
+                LOGD("Subscribing to discovered stream: ", discoveredStreams[i]);
+                subscribeToStream(discoveredStreams[i]);
+            }
+
+            if (activeStreams.size() == 0)
+            {
+                LOGD("No streams found matching pattern: ", streamPattern);
+                LOGD("This could mean:");
+                LOGD("  1. No streams exist in Redis with pattern: ", streamPattern);
+                LOGD("  2. Redis connection issue");
+                LOGD("  3. Stream discovery function failed");
+                return true; // Not an error, just no data available
+            }
+            else
+            {
+                LOGD("Successfully subscribed to ", activeStreams.size(), " streams");
+            }
         }
     }
 
     // Read from all active streams
     String streamNames = "";
     String streamIds = "";
+    String xreadCommand;
 
-    // Validate that we have active streams
-    if (activeStreams.size() == 0)
+    // Build XREAD command with thread safety
     {
-        LOGD("No active streams available for XREAD");
-        return true; // Not an error, just no data available
-    }
+        std::lock_guard<std::mutex> lock(streamMutex);
 
-    // Validate currentStreamId format
-    if (currentStreamId.isEmpty() ||
-        (!currentStreamId.contains("-") && currentStreamId != "0" && currentStreamId != "$"))
-    {
-        LOGE("Invalid currentStreamId format: '", currentStreamId, "'. Resetting to '$'");
-        currentStreamId = "$";
-    }
-
-    // Build XREAD command with proper syntax
-    String xreadCommand = "XREAD BLOCK 1000 STREAMS";
-
-    // Add stream names
-    for (int i = 0; i < activeStreams.size(); i++)
-    {
-        xreadCommand += " ";
-        xreadCommand += activeStreams[i];
-        if (i > 0) {
-            streamNames += " ";
-        }
-        streamNames += activeStreams[i];
-    }
-
-    // Add stream IDs (each stream has its own position)
-    for (int i = 0; i < activeStreams.size(); i++)
-    {
-        String streamName = activeStreams[i];
-        String streamId = currentStreamId; // Default for new streams
-
-        // Check if we have a specific position for this stream
-        if (streamPositions.find(streamName) != streamPositions.end())
+        // Validate that we have active streams
+        if (activeStreams.size() == 0)
         {
-            streamId = streamPositions[streamName];
+            LOGD("No active streams available for XREAD");
+            return true; // Not an error, just no data available
         }
-        else
+
+        // Validate currentStreamId format
+        if (currentStreamId.isEmpty() ||
+            (!currentStreamId.contains("-") && currentStreamId != "0" && currentStreamId != "$"))
         {
-            // Initialize new stream position
-            streamPositions[streamName] = currentStreamId;
-            LOGD("Initialized stream position for '", streamName, "' to '", currentStreamId, "'");
+            LOGE("Invalid currentStreamId format: '", currentStreamId, "'. Resetting to '$'");
+            currentStreamId = "$";
         }
 
-        xreadCommand += " ";
-        xreadCommand += streamId;
-        if (i > 0) {
-            streamIds += " ";
-        }
-        streamIds += streamId;
-    }
+        // Build XREAD command with proper syntax
+        xreadCommand = "XREAD BLOCK 1000 STREAMS";
 
-    LOGD("Reading from streams: ", streamNames, " with IDs: ", streamIds);
-    LOGD("Active streams count: ", activeStreams.size(), ", currentStreamId: ", currentStreamId);
-    LOGD("Full XREAD command: ", xreadCommand);
+        // Add stream names
+        for (int i = 0; i < activeStreams.size(); i++)
+        {
+            xreadCommand += " ";
+            xreadCommand += activeStreams[i];
+            if (i > 0) {
+                streamNames += " ";
+            }
+            streamNames += activeStreams[i];
+        }
+
+        // Add stream IDs (each stream has its own position)
+        for (int i = 0; i < activeStreams.size(); i++)
+        {
+            String streamName = activeStreams[i];
+            String streamId = currentStreamId; // Default for new streams
+
+            // Check if we have a specific position for this stream
+            if (streamPositions.find(streamName) != streamPositions.end())
+            {
+                streamId = streamPositions[streamName];
+            }
+            else
+            {
+                // Initialize new stream position
+                streamPositions[streamName] = currentStreamId;
+                LOGD("Initialized stream position for '", streamName, "' to '", currentStreamId, "'");
+            }
+
+            xreadCommand += " ";
+            xreadCommand += streamId;
+            if (i > 0) {
+                streamIds += " ";
+            }
+            streamIds += streamId;
+        }
+
+        LOGD("Reading from streams: ", streamNames, " with IDs: ", streamIds);
+        LOGD("Active streams count: ", activeStreams.size(), ", currentStreamId: ", currentStreamId);
+        LOGD("Full XREAD command: ", xreadCommand);
+    } // End of stream mutex lock
 
     // Use XREAD to read from multiple streams
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, xreadCommand.toRawUTF8());
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), xreadCommand.toRawUTF8()));
 
-    if (reply == nullptr)
+    if (!reply.isValid())
     {
         LOGE("XREAD command returned null reply");
         handleRedisError("XREAD command failed", "");
@@ -909,7 +1014,6 @@ bool RedisDataThread::updateBufferFromStreams()
     {
         // Timeout, no data available
         LOGD("XREAD timeout - no data available in streams");
-        freeReplyObject(reply);
         return true; // Not an error
     }
     else if (reply->type == REDIS_REPLY_ERROR)
@@ -929,7 +1033,6 @@ bool RedisDataThread::updateBufferFromStreams()
             LOGE("Error: XREAD command syntax error. Check stream names and IDs format.");
         }
 
-        freeReplyObject(reply);
         return false;
     }
 
@@ -944,8 +1047,9 @@ bool RedisDataThread::updateBufferFromStreams()
             redisReply* streamReply = reply->element[streamIdx];
             if (streamReply->type == REDIS_REPLY_ARRAY && streamReply->elements == 2)
             {
-                // Get stream name and entries
-                String streamName(streamReply->element[0]->str);
+                // Get stream name and entries - optimize string creation
+                StringUtils::StringView streamNameView(streamReply->element[0]->str, streamReply->element[0]->len);
+                String streamName = streamNameView.toString(); // Only create String when needed for map operations
                 redisReply* entriesReply = streamReply->element[1];
 
                 LOGD("Processing stream: ", streamName, " with ", entriesReply->elements, " entries");
@@ -958,7 +1062,10 @@ bool RedisDataThread::updateBufferFromStreams()
                     {
                         // Update stream position for this specific stream
                         String entryId = String(entryReply->element[0]->str);
-                        streamPositions[streamName] = entryId;
+                        {
+                            std::lock_guard<std::mutex> lock(streamMutex);
+                            streamPositions[streamName] = entryId;
+                        }
                         LOGD("Updated stream position for '", streamName, "' to '", entryId, "'");
 
                         // Get field-value pairs
@@ -979,7 +1086,6 @@ bool RedisDataThread::updateBufferFromStreams()
     {
         // Empty array response - no data available but not an error
         LOGD("XREAD returned empty array - no data available in streams");
-        freeReplyObject(reply);
         return true;
     }
     else
@@ -990,8 +1096,6 @@ bool RedisDataThread::updateBufferFromStreams()
             LOGE("Redis error message: ", String(reply->str, reply->len));
         }
     }
-
-    freeReplyObject(reply);
     LOGD("updateBufferFromStreams returning: ", success);
     return success;
 #else
@@ -1122,6 +1226,21 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
 
         return true;
     }
+    catch (const std::bad_alloc& e)
+    {
+        addError("Memory allocation failed during JSON parsing: " + String(e.what()), "JSON_MEMORY_ERROR", 4);
+        return false;
+    }
+    catch (const std::runtime_error& e)
+    {
+        addError("Runtime error parsing JSON data: " + String(e.what()), "JSON_RUNTIME_ERROR", 3);
+        return false;
+    }
+    catch (const std::logic_error& e)
+    {
+        addError("Logic error parsing JSON data: " + String(e.what()), "JSON_LOGIC_ERROR", 3);
+        return false;
+    }
     catch (const std::exception& e)
     {
         addError("Exception parsing JSON data: " + String(e.what()), "JSON_EXCEPTION", 3);
@@ -1162,22 +1281,34 @@ bool RedisDataThread::parseBinaryData(const char* data, size_t length, Array<flo
     return true;
 }
 
+#ifdef REDIS_ENABLED
 bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
 {
-#ifdef REDIS_ENABLED
     // Parse field-value pairs from stream entry
     for (size_t i = 0; i < fieldsReply->elements; i += 2)
     {
         if (i + 1 < fieldsReply->elements)
         {
-            String fieldName(fieldsReply->element[i]->str);
-            String fieldValue(fieldsReply->element[i + 1]->str);
+            // Optimize: Use string views for field name comparison
+            StringUtils::StringView fieldNameView(fieldsReply->element[i]->str, fieldsReply->element[i]->len);
 
-            LOGD("Stream field: ", fieldName, " = ", fieldValue.substring(0, 100), "...");
+            // Only create String objects when necessary
+            String fieldValue; // Will be created only if needed
 
-            // Process different field types
-            if (fieldName == "brandbci_data" || fieldName == "data")
+            // Log with optimized string handling
+            if (fieldsReply->element[i + 1]->len > 100) {
+                String truncatedValue(fieldsReply->element[i + 1]->str, 100);
+                LOGD("Stream field: ", fieldNameView.toString(), " = ", truncatedValue, "...");
+            } else {
+                LOGD("Stream field: ", fieldNameView.toString(), " = ",
+                     String(fieldsReply->element[i + 1]->str, fieldsReply->element[i + 1]->len));
+            }
+
+            // Process different field types using string view
+            if (fieldNameView.equals("brandbci_data") || fieldNameView.equals("data"))
             {
+                // Create String only when needed for parsing
+                fieldValue = String(fieldsReply->element[i + 1]->str, fieldsReply->element[i + 1]->len);
                 Array<float> channelData;
                 bool parseSuccess = false;
 
@@ -1236,10 +1367,14 @@ bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
     }
 
     return false;
-#else
-    return false;
-#endif
 }
+#else
+bool RedisDataThread::processStreamEntry(void* fieldsReply)
+{
+    // Redis not enabled - stub implementation
+    return false;
+}
+#endif
 
 bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& channelData)
 {
@@ -1297,14 +1432,29 @@ bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& cha
         return false;
 
     }
+    catch (const std::bad_alloc& e)
+    {
+        addError("Memory allocation failed during BRANDBCI parsing: " + String(e.what()), "BRANDBCI_MEMORY_ERROR", 4);
+        return false;
+    }
+    catch (const std::runtime_error& e)
+    {
+        addError("Runtime error parsing BRANDBCI data: " + String(e.what()), "BRANDBCI_RUNTIME_ERROR", 3);
+        return false;
+    }
+    catch (const std::logic_error& e)
+    {
+        addError("Logic error parsing BRANDBCI data: " + String(e.what()), "BRANDBCI_LOGIC_ERROR", 3);
+        return false;
+    }
     catch (const std::exception& e)
     {
-        LOGE("Exception parsing BRANDBCI data: ", e.what());
+        addError("Exception parsing BRANDBCI data: " + String(e.what()), "BRANDBCI_EXCEPTION", 3);
         return false;
     }
     catch (...)
     {
-        LOGE("Unknown exception parsing BRANDBCI data");
+        addError("Unknown exception parsing BRANDBCI data", "BRANDBCI_UNKNOWN_EXCEPTION", 3);
         return false;
     }
 }
@@ -1316,16 +1466,16 @@ bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& cha
 bool RedisDataThread::readFromStream(const String& streamName, String& data, String& newId)
 {
 #ifdef REDIS_ENABLED
-    if (!redisCtx || !connectionStatus.load()) {
+    if (!redisCtx.isValid() || !connectionStatus.load()) {
         return false;
     }
 
     // Use XREAD to read from stream
-    redisReply* reply = (redisReply*)redisCommand(redisCtx,
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(),
         "XREAD COUNT 1 BLOCK 1 STREAMS %s %s",
-        streamName.toRawUTF8(), currentStreamId.toRawUTF8());
+        streamName.toRawUTF8(), currentStreamId.toRawUTF8()));
 
-    if (!reply) {
+    if (!reply.isValid()) {
         handleRedisError("XREAD command failed", "");
         return false;
     }
@@ -1354,8 +1504,6 @@ bool RedisDataThread::readFromStream(const String& streamName, String& data, Str
             }
         }
     }
-
-    freeReplyObject(reply);
     return success;
 #else
     return false;
@@ -1632,15 +1780,15 @@ bool RedisDataThread::isValidChannelName(const String& channel) const
 bool RedisDataThread::executeRedisCommand(const String& command, String& result, String& errorMsg)
 {
 #ifdef REDIS_ENABLED
-    if (!redisCtx) {
+    if (!redisCtx.isValid()) {
         errorMsg = "Redis context is null";
         return false;
     }
 
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, command.toRawUTF8());
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), command.toRawUTF8()));
 
-    if (!reply) {
-        errorMsg = "Redis command failed: " + String(redisCtx->errstr);
+    if (!reply.isValid()) {
+        errorMsg = "Redis command failed: " + String(redisCtx.getErrorString());
         handleRedisError("executeRedisCommand", errorMsg);
         return false;
     }
@@ -1649,7 +1797,7 @@ bool RedisDataThread::executeRedisCommand(const String& command, String& result,
 
     switch (reply->type) {
         case REDIS_REPLY_STRING:
-            result = String(reply->str);
+            result = StringUtils::createString(reply->str, reply->len);
             success = true;
             break;
 
@@ -1659,12 +1807,12 @@ bool RedisDataThread::executeRedisCommand(const String& command, String& result,
             break;
 
         case REDIS_REPLY_STATUS:
-            result = String(reply->str);
+            result = StringUtils::createString(reply->str, reply->len);
             success = true;
             break;
 
         case REDIS_REPLY_ERROR:
-            errorMsg = String(reply->str);
+            errorMsg = StringUtils::createString(reply->str, reply->len);
             success = false;
             break;
 
@@ -1678,8 +1826,6 @@ bool RedisDataThread::executeRedisCommand(const String& command, String& result,
             success = false;
             break;
     }
-
-    freeReplyObject(reply);
 
     if (!success) {
         handleRedisError("executeRedisCommand", errorMsg);
@@ -1732,7 +1878,7 @@ void RedisDataThread::handleRedisError(const String& operation, const String& de
 bool RedisDataThread::performConnectionHealthCheck()
 {
 #ifdef REDIS_ENABLED
-    if (!redisCtx || healthCheckInProgress.load()) {
+    if (!redisCtx.isValid() || healthCheckInProgress.load()) {
         return false;
     }
 
@@ -1740,20 +1886,19 @@ bool RedisDataThread::performConnectionHealthCheck()
     auto startTime = std::chrono::high_resolution_clock::now();
 
     // Perform PING command to test connection
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, "PING");
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), "PING"));
 
     auto endTime = std::chrono::high_resolution_clock::now();
     float latency = std::chrono::duration<float, std::milli>(endTime - startTime).count();
 
     bool success = false;
-    if (reply != nullptr) {
+    if (reply.isValid()) {
         if (reply->type == REDIS_REPLY_STATUS &&
             String(reply->str) == "PONG") {
             success = true;
             recordOperationSuccess();
             perfMetrics.connectionLatency.store(latency);
         }
-        freeReplyObject(reply);
     }
 
     if (!success) {
@@ -1887,9 +2032,21 @@ bool RedisDataThread::parseJsonDataOptimized(const char* jsonStr, size_t length,
     auto parseStart = std::chrono::high_resolution_clock::now();
 
     try {
-        // Use JUCE's JSON parser but with optimized string handling
-        String jsonString(jsonStr, length);
-        var jsonData = JSON::parse(jsonString);
+        // Optimize: Only create String when necessary, use CharPointer directly when possible
+        var jsonData;
+
+        // For small JSON strings, use direct parsing to avoid string copy
+        if (length < 4096) {
+            // Create a null-terminated copy only for small strings
+            std::vector<char> buffer(length + 1);
+            memcpy(buffer.data(), jsonStr, length);
+            buffer[length] = '\0';
+            jsonData = JSON::parse(String(buffer.data()));
+        } else {
+            // For larger strings, create String object
+            String jsonString(jsonStr, length);
+            jsonData = JSON::parse(jsonString);
+        }
 
         if (!jsonData.isObject() || !jsonData.hasProperty("channels")) {
             return false;
@@ -1931,8 +2088,20 @@ bool RedisDataThread::parseJsonDataOptimized(const char* jsonStr, size_t length,
 
         return true;
 
+    } catch (const std::bad_alloc& e) {
+        addError("Memory allocation failed during optimized JSON parsing: " + String(e.what()), "JSON_OPT_MEMORY_ERROR", 4);
+        return false;
+    } catch (const std::runtime_error& e) {
+        addError("Runtime error in optimized JSON parsing: " + String(e.what()), "JSON_OPT_RUNTIME_ERROR", 3);
+        return false;
+    } catch (const std::logic_error& e) {
+        addError("Logic error in optimized JSON parsing: " + String(e.what()), "JSON_OPT_LOGIC_ERROR", 3);
+        return false;
+    } catch (const std::exception& e) {
+        addError("Exception in optimized JSON parsing: " + String(e.what()), "JSON_OPT_EXCEPTION", 3);
+        return false;
     } catch (...) {
-        addError("Optimized JSON parsing failed", "JSON_PARSE_OPTIMIZED_FAILED", 3);
+        addError("Unknown exception in optimized JSON parsing", "JSON_OPT_UNKNOWN_EXCEPTION", 3);
         return false;
     }
 }
@@ -2020,23 +2189,25 @@ void RedisDataThread::dataProcessingLoop()
 {
     LOGD("Data processing loop started");
 
-    while (shouldProcessData.load()) {
-        RawDataPacket* rawPacket = nullptr;
+    try {
+        while (shouldProcessData.load()) {
+            RawDataPacket* rawPacket = nullptr;
 
-        // Wait for data or stop signal
-        {
-            std::unique_lock<std::mutex> lock(dataQueueMutex);
-            dataAvailableCondition.wait_for(lock, std::chrono::milliseconds(100), [this]() {
-                return rawQueueCount.load() > 0 || !shouldProcessData.load();
-            });
-        }
+            try {
+                // Wait for data or stop signal
+                {
+                    std::unique_lock<std::mutex> lock(dataQueueMutex);
+                    dataAvailableCondition.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                        return rawQueueCount.load() > 0 || !shouldProcessData.load();
+                    });
+                }
 
-        if (!shouldProcessData.load()) {
-            break;
-        }
+                if (!shouldProcessData.load()) {
+                    break;
+                }
 
-        // Process available data packets
-        while (dequeueRawData(rawPacket) && rawPacket) {
+                // Process available data packets
+                while (dequeueRawData(rawPacket) && rawPacket) {
             auto processStart = std::chrono::high_resolution_clock::now();
 
             // Acquire a processed data packet
@@ -2090,10 +2261,27 @@ void RedisDataThread::dataProcessingLoop()
                 }
             }
 
-            // Release packets back to pools
-            releaseDataPacket(packet);
-            releaseRawDataPacket(rawPacket);
+                    // Release packets back to pools
+                    releaseDataPacket(packet);
+                    releaseRawDataPacket(rawPacket);
+                }
+            } catch (const std::exception& e) {
+                addError("Exception in data processing loop iteration: " + String(e.what()), "DATA_PROCESSING_EXCEPTION", 3);
+                recordOperationFailure();
+                // Continue processing other packets
+            } catch (...) {
+                addError("Unknown exception in data processing loop iteration", "DATA_PROCESSING_UNKNOWN_EXCEPTION", 3);
+                recordOperationFailure();
+                // Continue processing other packets
+            }
         }
+
+    } catch (const std::exception& e) {
+        addError("Fatal exception in data processing loop: " + String(e.what()), "DATA_PROCESSING_FATAL_EXCEPTION", 4);
+        LOGE("Data processing loop terminated due to exception: ", e.what());
+    } catch (...) {
+        addError("Fatal unknown exception in data processing loop", "DATA_PROCESSING_FATAL_UNKNOWN_EXCEPTION", 4);
+        LOGE("Data processing loop terminated due to unknown exception");
     }
 
     LOGD("Data processing loop ended");
@@ -2165,6 +2353,7 @@ void RedisDataThread::releaseRawDataPacket(RawDataPacket* packet)
 // Stream management methods
 void RedisDataThread::setStreamMode(bool useStreams)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     // Redis data is written using XADD (streams), so always use stream mode
     if (!useStreams)
     {
@@ -2183,6 +2372,7 @@ void RedisDataThread::setStreamMode(bool useStreams)
 
 void RedisDataThread::setStreamPattern(const String& pattern)
 {
+    std::lock_guard<std::mutex> lock(configMutex);
     streamPattern = pattern;
     LOGD("Stream pattern set to: ", pattern);
 }
@@ -2192,7 +2382,7 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
     Array<String> streams;
 
 #ifdef REDIS_ENABLED
-    if (!redisCtx || !connectionStatus.load())
+    if (!redisCtx.isValid() || !connectionStatus.load())
     {
         LOGE("Cannot discover streams - Redis not connected");
         return streams;
@@ -2201,9 +2391,9 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
     LOGD("Discovering streams with pattern: ", pattern);
 
     // Use KEYS command to find streams matching pattern
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, "KEYS %s", pattern.toRawUTF8());
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), "KEYS %s", pattern.toRawUTF8()));
 
-    if (reply && reply->type == REDIS_REPLY_ARRAY)
+    if (reply.isValid() && reply->type == REDIS_REPLY_ARRAY)
     {
         LOGD("Found ", reply->elements, " potential streams");
 
@@ -2211,19 +2401,21 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
         {
             if (reply->element[i]->type == REDIS_REPLY_STRING)
             {
-                String streamName(reply->element[i]->str);
+                // Optimize: Use string view for initial processing
+                StringUtils::StringView streamNameView(reply->element[i]->str, reply->element[i]->len);
+
+                // Create String only when needed for Redis command
+                String streamName = streamNameView.toString();
 
                 // Verify it's actually a stream
-                redisReply* typeReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", streamName.toRawUTF8());
+                RedisReplyRAII typeReply((redisReply*)redisCommand(redisCtx.get(), "TYPE %s", streamName.toRawUTF8()));
 
-                if (typeReply && typeReply->type == REDIS_REPLY_STATUS &&
-                    String(typeReply->str) == "stream")
+                if (typeReply.isValid() && typeReply->type == REDIS_REPLY_STATUS &&
+                    StringUtils::StringView(typeReply->str, typeReply->len).equals("stream"))
                 {
                     streams.add(streamName);
                     LOGD("Discovered stream: ", streamName);
                 }
-
-                if (typeReply) freeReplyObject(typeReply);
             }
         }
     }
@@ -2231,8 +2423,6 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
     {
         LOGE("Failed to discover streams - KEYS command failed");
     }
-
-    if (reply) freeReplyObject(reply);
 
     LOGD("Stream discovery complete: found ", streams.size(), " streams");
 #endif
@@ -2243,39 +2433,40 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
 bool RedisDataThread::subscribeToStream(const String& streamName)
 {
 #ifdef REDIS_ENABLED
-    if (!redisCtx || !connectionStatus.load())
+    if (!redisCtx.isValid() || !connectionStatus.load())
     {
         LOGE("Cannot subscribe to stream - Redis not connected");
         return false;
     }
 
     // Check if stream exists
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, "EXISTS %s", streamName.toRawUTF8());
-    bool exists = (reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
-
-    if (reply) freeReplyObject(reply);
+    RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), "EXISTS %s", streamName.toRawUTF8()));
+    bool exists = (reply.isValid() && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
 
     if (exists)
     {
         // Add to active streams if not already present
-        bool alreadyActive = false;
-        for (int i = 0; i < activeStreams.size(); i++)
         {
-            if (activeStreams[i] == streamName)
+            std::lock_guard<std::mutex> lock(streamMutex);
+            bool alreadyActive = false;
+            for (int i = 0; i < activeStreams.size(); i++)
             {
-                alreadyActive = true;
-                break;
+                if (activeStreams[i] == streamName)
+                {
+                    alreadyActive = true;
+                    break;
+                }
             }
-        }
 
-        if (!alreadyActive)
-        {
-            activeStreams.add(streamName);
-            LOGD("Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
-        }
-        else
-        {
-            LOGD("Already subscribed to stream: ", streamName);
+            if (!alreadyActive)
+            {
+                activeStreams.add(streamName);
+                LOGD("Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
+            }
+            else
+            {
+                LOGD("Already subscribed to stream: ", streamName);
+            }
         }
 
         return true;
@@ -2292,6 +2483,7 @@ bool RedisDataThread::subscribeToStream(const String& streamName)
 
 void RedisDataThread::unsubscribeFromStream(const String& streamName)
 {
+    std::lock_guard<std::mutex> lock(streamMutex);
     for (int i = 0; i < activeStreams.size(); i++)
     {
         if (activeStreams[i] == streamName)

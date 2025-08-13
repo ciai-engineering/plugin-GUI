@@ -8,6 +8,7 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #ifdef REDIS_ENABLED
 #include <hiredis/hiredis.h>
@@ -73,10 +74,15 @@ public:
     void cleanup() {
         if (ctx) {
             // Clean up test streams
-            redisCommand(ctx, "DEL %s", test_stream.c_str());
-            redisCommand(ctx, "DEL neural_data_test");
-            redisCommand(ctx, "DEL node_status_test");
-            
+            redisReply* reply = (redisReply*)redisCommand(ctx, "DEL %s", test_stream.c_str());
+            if (reply) freeReplyObject(reply);
+
+            reply = (redisReply*)redisCommand(ctx, "DEL neural_data_test");
+            if (reply) freeReplyObject(reply);
+
+            reply = (redisReply*)redisCommand(ctx, "DEL node_status_test");
+            if (reply) freeReplyObject(reply);
+
             redisFree(ctx);
             ctx = nullptr;
         }
@@ -263,7 +269,8 @@ public:
         
         // Cleanup
         for (const auto& stream : streams) {
-            redisCommand(ctx, "DEL %s", stream.c_str());
+            redisReply* cleanup_reply = (redisReply*)redisCommand(ctx, "DEL %s", stream.c_str());
+            if (cleanup_reply) freeReplyObject(cleanup_reply);
         }
         
         return success;

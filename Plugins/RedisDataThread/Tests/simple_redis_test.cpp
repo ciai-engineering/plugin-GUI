@@ -117,7 +117,8 @@ int main() {
     }
     
     // Cleanup
-    redisCommand(ctx, "DEL %s", test_stream.c_str());
+    reply = (redisReply*)redisCommand(ctx, "DEL %s", test_stream.c_str());
+    if (reply) freeReplyObject(reply);
     redisFree(ctx);
     
     std::cout << "\n🎉 All basic Redis stream tests passed!" << std::endl;
