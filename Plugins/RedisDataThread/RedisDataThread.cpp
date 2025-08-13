@@ -189,14 +189,26 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         LOGD("No password provided - skipping authentication");
     }
 
-    // Test connection with PING
+    // Test connection with PING using the new context directly
     LOGD("Testing Redis connection with PING command");
-    if (!testRedisConnection())
+    RedisReplyRAII pingReply((redisReply*)redisCommand(newCtx.get(), "PING"));
+    if (!pingReply.isValid() || pingReply->type != REDIS_REPLY_STATUS ||
+        String(pingReply->str) != "PONG")
     {
+        String errorMsg = "Redis PING test failed";
+        if (pingReply.isValid() && pingReply->type == REDIS_REPLY_ERROR)
+        {
+            errorMsg += ": " + String(pingReply->str);
+        }
+        else if (!pingReply.isValid())
+        {
+            errorMsg += ": " + String(newCtx.getErrorString());
+        }
+        addError(errorMsg, "PING_FAILED", 3);
         updateConnectionState(ConnectionState::CONNECTION_FAILED);
-        disconnectFromRedis();
         return false;
     }
+    LOGD("✓ Redis PING test successful");
 
     // Test channel access based on mode
     LOGD("Testing access to Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
@@ -430,7 +442,25 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         return records;
     }
 
-    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
+    // In stream mode, we need to check if we should use the specific channel or discover streams
+    String queryTarget = redisChannel;
+    if (useStreamMode && redisChannel.contains("*"))
+    {
+        // If the channel contains wildcards, discover streams first
+        Array<String> discoveredStreams = discoverStreams(redisChannel);
+        if (discoveredStreams.size() > 0)
+        {
+            queryTarget = discoveredStreams[0]; // Use the first discovered stream
+            LOGD("Using discovered stream: ", queryTarget, " for data retrieval");
+        }
+        else
+        {
+            LOGD("No streams found matching pattern: ", redisChannel);
+            return records;
+        }
+    }
+
+    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", queryTarget, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
     RedisReplyRAII reply(nullptr);
 
@@ -438,7 +468,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     {
         // For streams, use XREVRANGE to get latest entries
         reply = RedisReplyRAII((redisReply*)redisCommand(redisCtx.get(),
-            "XREVRANGE %s + - COUNT %d", redisChannel.toRawUTF8(), numRecords));
+            "XREVRANGE %s + - COUNT %d", queryTarget.toRawUTF8(), numRecords));
     }
     else
     {
@@ -449,7 +479,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         int stopIndex = -1;
 
         reply = RedisReplyRAII((redisReply*)redisCommand(redisCtx.get(),
-            "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex));
+            "LRANGE %s %d %d", queryTarget.toRawUTF8(), startIndex, stopIndex));
     }
 
     if (!reply.isValid())
