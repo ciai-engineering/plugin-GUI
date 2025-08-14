@@ -478,6 +478,13 @@ private:
 
     // Pre-allocated buffer pool
     static constexpr size_t BUFFER_POOL_SIZE = 32;
+
+    // Performance optimization constants for smooth LFP display
+    // These values are tuned to match File Reader performance (50Hz LFP refresh rate)
+    static constexpr int REDIS_BLOCK_TIMEOUT_MS = 50;        // Redis blocking timeout (was 1000ms)
+    static constexpr int PROCESSING_THREAD_TIMEOUT_MS = 20;  // Processing thread wait timeout (was 100ms)
+    static constexpr int OPERATION_TIMEOUT_MS = 100;        // Socket operation timeout (was 1000ms)
+    static constexpr int OPTIMIZED_BUFFER_SIZE = 5000;      // Buffer size for real-time display (was 10000)
     std::array<DataPacket, BUFFER_POOL_SIZE> bufferPool;
     std::atomic<size_t> poolIndex{0};
     std::mutex poolMutex;

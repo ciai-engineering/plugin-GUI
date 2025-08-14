@@ -137,9 +137,9 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         disconnectFromRedis();
     }
 
-    // Create new connection with timeout
+    // Create new connection with optimized timeout
     LOGD("Creating Redis connection context");
-    struct timeval timeout = { 2, 0 }; // 2 seconds timeout
+    struct timeval timeout = { 1, 0 }; // 1 second timeout for faster connection
 
     // Create new context using RAII wrapper
     RedisContextRAII newCtx(host.toRawUTF8(), port, timeout);
@@ -157,8 +157,8 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 
     LOGD("Redis context created successfully");
 
-    // Set socket timeout for operations
-    struct timeval tv = { 1, 0 }; // 1 second timeout for operations
+    // Set socket timeout for operations - optimized for display performance
+    struct timeval tv = { 0, OPERATION_TIMEOUT_MS * 1000 }; // Optimized timeout for operations
     redisSetTimeout(newCtx.get(), tv);
 
     // Authenticate if password is provided
@@ -736,8 +736,8 @@ void RedisDataThread::resizeBuffers()
     sourceBuffers.clear();
 
     // Create one DataBuffer for our single data stream
-    // Buffer size: 10000 samples should be sufficient for Redis data
-    const int bufferSize = 10000;
+    // Buffer size optimized for real-time display performance
+    const int bufferSize = OPTIMIZED_BUFFER_SIZE;
 
     DataBuffer* buffer = new DataBuffer(numChannels, bufferSize);
     sourceBuffers.add(buffer);
@@ -755,8 +755,8 @@ bool RedisDataThread::updateBuffer()
 
         callCount++;
 
-        // Log every call for the first 10 calls, then every 100 calls
-        if (callCount <= 10 || callCount % 100 == 0) {
+        // Log every call for the first 10 calls, then every 1000 calls to reduce overhead
+        if (callCount <= 10 || callCount % 1000 == 0) {
             LOGD("🔄 updateBuffer() called #", callCount, " - acquiring: ", isAcquiring.load(), ", connected: ", connectionStatus.load());
         }
 
@@ -871,12 +871,15 @@ bool RedisDataThread::updateBuffer()
 bool RedisDataThread::updateBufferFromList()
 {
 #ifdef REDIS_ENABLED
-    // Log BLPOP command execution
-    LOGD("Executing BLPOP command on channel: ", redisChannel);
+    // Reduced logging for performance - only log occasionally
+    static int blpopCallCount = 0;
+    if (++blpopCallCount <= 5 || blpopCallCount % 1000 == 0) {
+        LOGD("Executing BLPOP command on channel: ", redisChannel, " (call #", blpopCallCount, ")");
+    }
 
-    // Get data from Redis (blocking call with 1 second timeout)
+    // Get data from Redis (blocking call with optimized timeout for smooth display)
     RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(),
-        "BLPOP %s 1", redisChannel.toRawUTF8()));
+        "BLPOP %s %f", redisChannel.toRawUTF8(), REDIS_BLOCK_TIMEOUT_MS / 1000.0f));
 
     if (!reply.isValid())
     {
@@ -885,7 +888,10 @@ bool RedisDataThread::updateBufferFromList()
         return false;
     }
 
-    LOGD("BLPOP reply type: ", reply->type, ", elements: ", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+    // Reduced logging for performance
+    if (blpopCallCount <= 5 || blpopCallCount % 1000 == 0) {
+        LOGD("BLPOP reply type: ", reply->type, ", elements: ", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+    }
 
     if (reply->type == REDIS_REPLY_NIL)
     {
@@ -983,8 +989,8 @@ bool RedisDataThread::updateBufferFromStreams()
             currentStreamId = "$";
         }
 
-        // Build XREAD command with proper syntax
-        xreadCommand = "XREAD BLOCK 1000 STREAMS";
+        // Build XREAD command with optimized timeout for smooth display
+        xreadCommand = "XREAD BLOCK " + String(REDIS_BLOCK_TIMEOUT_MS) + " STREAMS";
 
         // Add stream names
         for (int i = 0; i < activeStreams.size(); i++)
@@ -1051,7 +1057,7 @@ bool RedisDataThread::updateBufferFromStreams()
         // Redis returned an error - log the specific error message
         String errorMsg(reply->str, reply->len);
         LOGE("XREAD command failed with Redis error: ", errorMsg);
-        LOGE("Command was: XREAD BLOCK 1000 STREAMS ", streamNames, " ", streamIds);
+        LOGE("Command was: XREAD BLOCK ", REDIS_BLOCK_TIMEOUT_MS, " STREAMS ", streamNames, " ", streamIds);
 
         // Check for common error conditions
         if (errorMsg.contains("WRONGTYPE"))
@@ -1500,10 +1506,10 @@ bool RedisDataThread::readFromStream(const String& streamName, String& data, Str
         return false;
     }
 
-    // Use XREAD to read from stream
+    // Use XREAD to read from stream with optimized timeout
     RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(),
-        "XREAD COUNT 1 BLOCK 1 STREAMS %s %s",
-        streamName.toRawUTF8(), currentStreamId.toRawUTF8()));
+        "XREAD COUNT 1 BLOCK %d STREAMS %s %s",
+        REDIS_BLOCK_TIMEOUT_MS, streamName.toRawUTF8(), currentStreamId.toRawUTF8()));
 
     if (!reply.isValid()) {
         handleRedisError("XREAD command failed", "");
@@ -2224,10 +2230,10 @@ void RedisDataThread::dataProcessingLoop()
             RawDataPacket* rawPacket = nullptr;
 
             try {
-                // Wait for data or stop signal
+                // Wait for data or stop signal with reduced timeout for better responsiveness
                 {
                     std::unique_lock<std::mutex> lock(dataQueueMutex);
-                    dataAvailableCondition.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                    dataAvailableCondition.wait_for(lock, std::chrono::milliseconds(PROCESSING_THREAD_TIMEOUT_MS), [this]() {
                         return rawQueueCount.load() > 0 || !shouldProcessData.load();
                     });
                 }
