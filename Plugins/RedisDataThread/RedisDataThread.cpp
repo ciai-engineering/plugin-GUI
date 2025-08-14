@@ -839,8 +839,10 @@ bool RedisDataThread::updateBuffer()
             samplesProcessed++;
             recordOperationSuccess();
             perfMetrics.totalSamplesProcessed.fetch_add(1);
+            LOGD("🔄 updateBuffer SUCCESS - total samples processed: ", samplesProcessed);
         } else {
             recordOperationFailure();
+            LOGD("🔄 updateBuffer FAILED - operation failed");
         }
 
         return result;
@@ -935,33 +937,58 @@ bool RedisDataThread::updateBufferFromStreams()
 {
 #ifdef REDIS_ENABLED
     // Check active streams with thread safety
+    bool needsSubscription = false;
     {
         std::lock_guard<std::mutex> lock(streamMutex);
-        if (activeStreams.size() == 0)
+        needsSubscription = (activeStreams.size() == 0);
+    }
+
+    if (needsSubscription)
+    {
+        // First try to use the configured channel directly
+        LOGD("No active streams - trying direct channel: ", redisChannel);
+        subscribeToStreamUnsafe(redisChannel);
+
+        // Check if subscription worked
+        bool subscriptionSucceeded = false;
         {
-            LOGD("No active streams - discovering streams with pattern: ", streamPattern);
+            std::lock_guard<std::mutex> lock(streamMutex);
+            subscriptionSucceeded = (activeStreams.size() > 0);
+        }
+
+        // If that didn't work, try pattern discovery
+        if (!subscriptionSucceeded)
+        {
+            LOGD("Direct channel failed - discovering streams with pattern: ", streamPattern);
             Array<String> discoveredStreams = discoverStreams(streamPattern);
             LOGD("Stream discovery found ", discoveredStreams.size(), " streams");
 
             for (int i = 0; i < discoveredStreams.size(); i++)
             {
                 LOGD("Subscribing to discovered stream: ", discoveredStreams[i]);
-                subscribeToStream(discoveredStreams[i]);
+                subscribeToStreamUnsafe(discoveredStreams[i]);
             }
+        }
 
-            if (activeStreams.size() == 0)
-            {
-                LOGD("No streams found matching pattern: ", streamPattern);
-                LOGD("This could mean:");
-                LOGD("  1. No streams exist in Redis with pattern: ", streamPattern);
-                LOGD("  2. Redis connection issue");
-                LOGD("  3. Stream discovery function failed");
-                return true; // Not an error, just no data available
-            }
-            else
-            {
-                LOGD("Successfully subscribed to ", activeStreams.size(), " streams");
-            }
+        // Final check
+        int finalStreamCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(streamMutex);
+            finalStreamCount = activeStreams.size();
+        }
+
+        if (finalStreamCount == 0)
+        {
+            LOGD("No streams found - tried channel '", redisChannel, "' and pattern '", streamPattern, "'");
+            LOGD("This could mean:");
+            LOGD("  1. No streams exist in Redis");
+            LOGD("  2. Redis connection issue");
+            LOGD("  3. Stream discovery function failed");
+            return true; // Not an error, just no data available
+        }
+        else
+        {
+            LOGD("Successfully subscribed to ", finalStreamCount, " streams");
         }
     }
 
@@ -1380,12 +1407,15 @@ bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
                             if (written > 0)
                             {
                                 currentSampleNumber++;
-                                LOGD("Added ", numChannels, " channels to buffer, sample #", currentSampleNumber.load());
+                                LOGD("✅ Successfully added ", numChannels, " channels to buffer, sample #", currentSampleNumber.load());
+                                LOGD("   Data range: [", channelData[0], ", ", channelData[numChannels-1], "]");
+                                LOGD("   Buffer size: ", buffer->getNumSamples(), " samples available");
                                 return true;
                             }
                             else
                             {
-                                LOGE("Failed to write to DataBuffer");
+                                LOGE("❌ Failed to write to DataBuffer - buffer may be full or locked");
+                                LOGE("   Buffer size: ", buffer->getNumSamples(), " samples available");
                             }
                         }
                     }
@@ -2172,10 +2202,13 @@ bool RedisDataThread::processDataPacketToBuffer(DataPacket* packet)
 
     if (written > 0) {
         currentSampleNumber++;
+        LOGD("✅ Multi-threaded: Successfully wrote packet to buffer, sample #", currentSampleNumber.load());
+        LOGD("   Channels: ", packet->channelData.size(), ", Buffer samples: ", buffer->getNumSamples());
         return true;
     } else {
         perfMetrics.droppedSamples.fetch_add(1);
-        addError("Failed to write to DataBuffer", "BUFFER_WRITE_FAILED", 3);
+        addError("❌ Multi-threaded: Failed to write to DataBuffer", "BUFFER_WRITE_FAILED", 3);
+        LOGE("   Buffer samples: ", buffer->getNumSamples(), ", Packet channels: ", packet->channelData.size());
         return false;
     }
 }
@@ -2468,48 +2501,81 @@ Array<String> RedisDataThread::discoverStreams(const String& pattern)
 
 bool RedisDataThread::subscribeToStream(const String& streamName)
 {
+    return subscribeToStreamUnsafe(streamName);
+}
+
+bool RedisDataThread::subscribeToStreamUnsafe(const String& streamName)
+{
 #ifdef REDIS_ENABLED
+    LOGD("🔍 Attempting to subscribe to stream: '", streamName, "'");
+
     if (!redisCtx.isValid() || !connectionStatus.load())
     {
-        LOGE("Cannot subscribe to stream - Redis not connected");
+        LOGE("❌ Cannot subscribe to stream - Redis not connected");
         return false;
     }
 
     // Check if stream exists
+    LOGD("🔍 Checking if stream exists: ", streamName);
     RedisReplyRAII reply((redisReply*)redisCommand(redisCtx.get(), "EXISTS %s", streamName.toRawUTF8()));
     bool exists = (reply.isValid() && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
 
+    LOGD("🔍 Stream '", streamName, "' exists: ", exists ? "YES" : "NO");
+
+    if (!exists) {
+        // Try to get stream info for debugging
+        RedisReplyRAII infoReply((redisReply*)redisCommand(redisCtx.get(), "XINFO STREAM %s", streamName.toRawUTF8()));
+        if (infoReply.isValid()) {
+            LOGD("🔍 Stream info available for: ", streamName);
+        } else {
+            LOGD("🔍 No stream info available for: ", streamName);
+        }
+    }
+
     if (exists)
     {
-        // Add to active streams if not already present
+        // Get stream length for debugging
+        RedisReplyRAII lenReply((redisReply*)redisCommand(redisCtx.get(), "XLEN %s", streamName.toRawUTF8()));
+        if (lenReply.isValid() && lenReply->type == REDIS_REPLY_INTEGER) {
+            LOGD("🔍 Stream '", streamName, "' has ", lenReply->integer, " entries");
+        }
+
+        // Add to active streams if not already present (thread-safe)
+        LOGD("🔍 About to add stream to activeStreams list");
         {
             std::lock_guard<std::mutex> lock(streamMutex);
+            LOGD("🔍 Acquired stream mutex, current activeStreams size: ", activeStreams.size());
+
             bool alreadyActive = false;
             for (int i = 0; i < activeStreams.size(); i++)
             {
+                LOGD("🔍 Checking existing stream ", i, ": '", activeStreams[i], "'");
                 if (activeStreams[i] == streamName)
                 {
                     alreadyActive = true;
+                    LOGD("🔍 Found existing stream match at index ", i);
                     break;
                 }
             }
 
             if (!alreadyActive)
             {
+                LOGD("🔍 Adding new stream to activeStreams: '", streamName, "'");
                 activeStreams.add(streamName);
-                LOGD("Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
+                LOGD("✅ Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
             }
             else
             {
-                LOGD("Already subscribed to stream: ", streamName);
+                LOGD("⚠️  Already subscribed to stream: ", streamName);
             }
         }
+        LOGD("🔍 Finished adding stream to activeStreams");
 
         return true;
     }
     else
     {
-        LOGE("Cannot subscribe to non-existent stream: ", streamName);
+        LOGE("❌ Cannot subscribe to non-existent stream: ", streamName);
         return false;
     }
 #else

@@ -375,6 +375,7 @@ public:
     void setStreamPattern(const String& pattern);
     Array<String> discoverStreams(const String& pattern = "*");
     bool subscribeToStream(const String& streamName);
+    bool subscribeToStreamUnsafe(const String& streamName);  // Internal method without mutex
     void unsubscribeFromStream(const String& streamName);
 
     /** Configuration getters */
