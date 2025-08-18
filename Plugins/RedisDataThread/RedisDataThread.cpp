@@ -36,8 +36,6 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , dataFormat("brandbci")
     , autoDetectChannels(true)     // Enable auto-detection by default
     , useStreamMode(true)
-    , streamPattern("neural_*")
-    , maxActiveStreams(10)         // Limit concurrent streams
     , currentStreamId("0-0")
     , isAcquiring(false)
     , connectionStatus(false)
@@ -52,12 +50,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     LOGD("  - Format: ", dataFormat);
     LOGD("  - Data Channels: ", numDataChannels, " (max: ", maxDataChannels, ")");
     LOGD("  - Auto-detect channels: ", autoDetectChannels ? "enabled" : "disabled");
-    LOGD("  - Stream pattern: ", streamPattern);
-    LOGD("  - Max active streams: ", maxActiveStreams);
-
-    // Initialize stream patterns array
-    streamPatterns.clear();
-    streamPatterns.add(streamPattern);
+    LOGD("  - Stream mode: ", useStreamMode ? "ENABLED" : "DISABLED");
 
     // Validate initial configuration
     if (!validateConfiguration()) {
@@ -65,7 +58,6 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     }
     LOGD("  - Sample Rate: ", sampleRate);
     LOGD("  - Stream Mode: ", useStreamMode ? "ENABLED" : "DISABLED");
-    LOGD("  - Stream Pattern: ", streamPattern);
     LOGD("  - Open Ephys Format: ", enableOpenEphysFormat ? "ENABLED" : "DISABLED");
     LOGD("  - Data Validation: ", enableDataValidation ? "ENABLED" : "DISABLED");
     LOGD("  - Redis context: ", (redisCtx ? "initialized" : "null"));
@@ -692,14 +684,14 @@ bool RedisDataThread::updateBuffer()
         int64 samplesDelta = samplesProcessed - lastSampleCount;
         double rate = samplesDelta / 5.0; // samples per second
         LOGD("Redis Status: processed=", samplesProcessed, " samples, rate=", rate, " samples/sec, acquiring=", isAcquiring.load(), ", connected=", connectionStatus.load());
-        LOGD("  Mode: ", useStreamMode ? "STREAMS" : "LISTS", ", Active streams: ", activeStreams.size());
+        LOGD("  Mode: ", useStreamMode ? "STREAMS" : "LISTS", ", Stream: ", redisChannelName);
         lastLogTime = currentTime;
         lastSampleCount = samplesProcessed;
     }
 
     // Route to appropriate update method based on mode
     LOGD("updateBuffer: Using ", useStreamMode ? "STREAM" : "LIST", " mode");
-    bool result = useStreamMode ? updateBufferFromStreams() : updateBufferFromList();
+    bool result = useStreamMode ? updateBufferFromStream() : updateBufferFromList();
     if (result) {
         samplesProcessed++;
     }
@@ -838,47 +830,22 @@ bool RedisDataThread::updateBufferFromList()
 #endif
 }
 
-bool RedisDataThread::updateBufferFromStreams()
+bool RedisDataThread::updateBufferFromStream()
 {
 #ifdef REDIS_ENABLED
-    if (activeStreams.size() == 0)
+    if (redisChannelName.isEmpty())
     {
-        LOGD("No active streams - discovering streams with pattern: ", streamPattern);
-        Array<String> discoveredStreams = discoverStreams(streamPattern);
-
-        for (int i = 0; i < discoveredStreams.size(); i++)
-        {
-            subscribeToStream(discoveredStreams[i]);
-        }
-
-        if (activeStreams.size() == 0)
-        {
-            LOGD("No streams found matching pattern: ", streamPattern);
-            return true; // Not an error, just no data available
-        }
+        LOGE("Stream name is empty - cannot read from stream");
+        return false;
     }
 
-    // Read from all active streams
-    String streamNames = "";
-    String streamIds = "";
+    LOGD("Reading from stream: ", redisChannelName, " with ID: ", currentStreamId);
 
-    for (int i = 0; i < activeStreams.size(); i++)
-    {
-        if (i > 0) {
-            streamNames += " ";
-            streamIds += " ";
-        }
-        streamNames += activeStreams[i];
-        streamIds += currentStreamId;
-    }
-
-    LOGD("Reading from streams: ", streamNames, " with IDs: ", streamIds);
-
-    // Use XREAD to read from multiple streams
+    // Use XREAD to read from single stream
     redisReply* reply = (redisReply*)redisCommand(redisCtx,
         "XREAD BLOCK 1000 STREAMS %s %s",
-        streamNames.toRawUTF8(),
-        streamIds.toRawUTF8());
+        redisChannelName.toRawUTF8(),
+        currentStreamId.toRawUTF8());
 
     if (reply == nullptr)
     {
@@ -892,7 +859,7 @@ bool RedisDataThread::updateBufferFromStreams()
     if (reply->type == REDIS_REPLY_NIL)
     {
         // Timeout, no data available
-        LOGD("XREAD timeout - no data available in streams");
+        LOGD("XREAD timeout - no data available in stream");
         freeReplyObject(reply);
         return true; // Not an error
     }
@@ -902,38 +869,33 @@ bool RedisDataThread::updateBufferFromStreams()
     {
         LOGD("XREAD returned array with ", reply->elements, " stream(s) - processing data");
 
-        // Process each stream that has data
-        for (size_t streamIdx = 0; streamIdx < reply->elements; streamIdx++)
+        // Process the stream data
+        redisReply* streamReply = reply->element[0];
+        if (streamReply->type == REDIS_REPLY_ARRAY && streamReply->elements == 2)
         {
-            redisReply* streamReply = reply->element[streamIdx];
-            if (streamReply->type == REDIS_REPLY_ARRAY && streamReply->elements == 2)
+            // Get stream name and entries
+            String receivedStreamName(streamReply->element[0]->str);
+            redisReply* entriesReply = streamReply->element[1];
+
+            LOGD("Processing stream: ", receivedStreamName, " with ", entriesReply->elements, " entries");
+
+            // Process each entry in the stream
+            for (size_t entryIdx = 0; entryIdx < entriesReply->elements; entryIdx++)
             {
-                // Get stream name and entries
-                String streamName(streamReply->element[0]->str);
-                redisReply* entriesReply = streamReply->element[1];
-
-                LOGD("Processing stream: ", streamName, " with ", entriesReply->elements, " entries");
-
-                // Process each entry in the stream
-                for (size_t entryIdx = 0; entryIdx < entriesReply->elements; entryIdx++)
+                redisReply* entryReply = entriesReply->element[entryIdx];
+                if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
                 {
-                    redisReply* entryReply = entriesReply->element[entryIdx];
-                    if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
-                    {
-                        // Update stream position
-                        currentStreamId = String(entryReply->element[0]->str);
+                    // Update stream position
+                    currentStreamId = String(entryReply->element[0]->str);
 
-                        // Get field-value pairs
-                        redisReply* fieldsReply = entryReply->element[1];
-                        if (fieldsReply->type == REDIS_REPLY_ARRAY)
-                        {
-                            success = processStreamEntry(fieldsReply);
-                            if (success) break; // Process one entry at a time
-                        }
+                    // Get field-value pairs
+                    redisReply* fieldsReply = entryReply->element[1];
+                    if (fieldsReply->type == REDIS_REPLY_ARRAY)
+                    {
+                        success = processStreamEntry(fieldsReply);
+                        if (success) break; // Process one entry at a time
                     }
                 }
-
-                if (success) break; // Process one stream at a time
             }
         }
     }
@@ -943,7 +905,7 @@ bool RedisDataThread::updateBufferFromStreams()
     }
 
     freeReplyObject(reply);
-    LOGD("updateBufferFromStreams returning: ", success);
+    LOGD("updateBufferFromStream returning: ", success);
     return success;
 #else
     LOGE("Redis not compiled - REDIS_ENABLED not defined");
@@ -1312,135 +1274,9 @@ void RedisDataThread::setStreamMode(bool useStreams)
     }
 }
 
-void RedisDataThread::setStreamPattern(const String& pattern)
-{
-    if (streamPattern != pattern)
-    {
-        streamPattern = pattern;
-        LOGD("Stream pattern changed to: ", pattern);
-    }
-}
 
-Array<String> RedisDataThread::discoverStreams(const String& pattern)
-{
-    Array<String> streams;
 
-#ifdef REDIS_ENABLED
-    if (!redisCtx || !connectionStatus.load())
-    {
-        LOGE("Cannot discover streams - Redis not connected");
-        return streams;
-    }
 
-    LOGD("Discovering streams with pattern: ", pattern);
-
-    // Use KEYS command to find streams matching pattern
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, "KEYS %s", pattern.toRawUTF8());
-
-    if (reply && reply->type == REDIS_REPLY_ARRAY)
-    {
-        LOGD("Found ", reply->elements, " potential streams");
-
-        for (size_t i = 0; i < reply->elements; i++)
-        {
-            if (reply->element[i]->type == REDIS_REPLY_STRING)
-            {
-                String streamName(reply->element[i]->str);
-
-                // Verify it's actually a stream
-                redisReply* typeReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", streamName.toRawUTF8());
-
-                if (typeReply && typeReply->type == REDIS_REPLY_STATUS &&
-                    String(typeReply->str) == "stream")
-                {
-                    streams.add(streamName);
-                    LOGD("Discovered stream: ", streamName);
-                }
-
-                if (typeReply) freeReplyObject(typeReply);
-            }
-        }
-    }
-    else
-    {
-        LOGE("Failed to discover streams - KEYS command failed");
-    }
-
-    if (reply) freeReplyObject(reply);
-
-    LOGD("Stream discovery complete: found ", streams.size(), " streams");
-#endif
-
-    return streams;
-}
-
-bool RedisDataThread::subscribeToStream(const String& streamName)
-{
-#ifdef REDIS_ENABLED
-    if (!redisCtx || !connectionStatus.load())
-    {
-        LOGE("Cannot subscribe to stream - Redis not connected");
-        return false;
-    }
-
-    // Check if stream exists
-    redisReply* reply = (redisReply*)redisCommand(redisCtx, "EXISTS %s", streamName.toRawUTF8());
-    bool exists = (reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
-
-    if (reply) freeReplyObject(reply);
-
-    if (exists)
-    {
-        // Add to active streams if not already present
-        bool alreadyActive = false;
-        for (int i = 0; i < activeStreams.size(); i++)
-        {
-            if (activeStreams[i] == streamName)
-            {
-                alreadyActive = true;
-                break;
-            }
-        }
-
-        if (!alreadyActive)
-        {
-            activeStreams.add(streamName);
-            LOGD("Subscribed to stream: ", streamName, " (total active: ", activeStreams.size(), ")");
-        }
-        else
-        {
-            LOGD("Already subscribed to stream: ", streamName);
-        }
-
-        return true;
-    }
-    else
-    {
-        LOGE("Cannot subscribe to non-existent stream: ", streamName);
-        return false;
-    }
-#else
-    return false;
-#endif
-}
-
-void RedisDataThread::unsubscribeFromStream(const String& streamName)
-{
-    for (int i = 0; i < activeStreams.size(); i++)
-    {
-        if (activeStreams[i] == streamName)
-        {
-            activeStreams.remove(i);
-            LOGD("Unsubscribed from stream: ", streamName, " (remaining active: ", activeStreams.size(), ")");
-            break;
-        }
-    }
-}
-
-Array<String> RedisDataThread::getActiveStreams() const
-{
-    return activeStreams;
-}
 
 // ============================================================================
 // Open Ephys Format Processing Methods
@@ -2059,8 +1895,9 @@ bool RedisDataThread::validateConfiguration() const
         return false;
     }
 
-    // Validate stream pattern
-    if (useStreamMode && !validateStreamPattern(streamPattern)) {
+    // Validate stream name (use channel name as stream name in stream mode)
+    if (useStreamMode && redisChannelName.isEmpty()) {
+        LOGE("Configuration validation failed: Channel name cannot be empty in stream mode");
         return false;
     }
 
@@ -2095,23 +1932,4 @@ bool RedisDataThread::validateChannelConfiguration(int channels) const
     return true;
 }
 
-bool RedisDataThread::validateStreamPattern(const String& pattern) const
-{
-    if (pattern.isEmpty()) {
-        LOGE("Stream pattern validation failed: Pattern cannot be empty");
-        return false;
-    }
 
-    // Check for basic pattern validity
-    if (pattern.length() > 256) {
-        LOGE("Stream pattern validation failed: Pattern too long (max 256 characters)");
-        return false;
-    }
-
-    // Check for potentially dangerous patterns
-    if (pattern == "*" && maxActiveStreams > 50) {
-        LOGD("Warning: Wildcard pattern '*' with high stream limit may cause performance issues");
-    }
-
-    return true;
-}

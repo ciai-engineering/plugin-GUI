@@ -14,7 +14,8 @@
                type="0" index="2" libraryName="Redis DataThread" libraryVersion="1.0.0" processorType="2"
                nodeId="100">
       <PROCESSOR_PARAMETERS host="localhost" port="6379" password="" channel="openephys_data"
-                            sample_rate="30000.0" num_channels="32" data_format="json"/>
+                            sample_rate="30000.0" num_channels="32" data_format="brandbci"
+                            stream_mode="true" stream_name="neural_data"/>
       <STREAM name="redis_data" description="Real-time data stream from Redis server"
               sample_rate="30000.0" channel_count="32">
         <PARAMETERS enable_stream="1"/>

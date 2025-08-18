@@ -2,13 +2,14 @@
 
 ## Overview
 
-The RedisDataThread plugin now supports Redis streams for real-time neural data streaming from BRANDBCI (Backend for Real-time Asynchronous Neural Decoding) systems. This enhancement provides:
+The RedisDataThread plugin supports Redis streams for real-time neural data streaming from BRANDBCI (Backend for Real-time Asynchronous Neural Decoding) systems. This enhancement provides:
 
 - **Redis Stream Support**: Uses XREAD commands for efficient stream processing
 - **BRANDBCI Data Format**: Native support for BRANDBCI JSON data structures
-- **Multi-stream Management**: Automatic discovery and subscription to multiple data streams
+- **Single Stream Connection**: Each Redis Source connects to one stream for simplicity
 - **Real-time Performance**: Optimized for low-latency neural data processing (< 10ms)
 - **Backward Compatibility**: Maintains support for legacy BLPOP list operations
+- **Multi-Source Support**: Use multiple Redis Source components with OpenEphys Merger for multi-stream processing
 
 ## Quick Start
 
@@ -20,7 +21,7 @@ In the OpenEphys GUI:
    - **Host**: Your BRANDBCI system IP (e.g., `192.168.1.100`)
    - **Port**: Redis port (default `6379`)
    - **Stream Mode**: `ENABLED`
-   - **Stream Pattern**: `neural_*` (or your specific pattern)
+   - **Stream Name**: `neural_data` (specific stream name)
    - **Data Format**: `brandbci`
 
 ### 2. Start BRANDBCI System
@@ -53,9 +54,8 @@ python3 demo_brandbci_plugin.py
 ### Stream Settings
 
 - **Stream Mode**: Enable/disable Redis stream support
-- **Stream Pattern**: Pattern for automatic stream discovery (e.g., `neural_*`, `lfp_*`)
-- **Auto Discovery**: Automatically find and subscribe to matching streams
-- **Max Streams**: Maximum number of concurrent streams to handle
+- **Stream Name**: Specific name of the Redis stream to connect to (e.g., `neural_data`, `lfp_stream`)
+- **Single Stream**: Each Redis Source connects to exactly one stream for simplicity and reliability
 
 ### Data Format Support
 
@@ -211,6 +211,43 @@ stream_id = r.xadd("neural_test", {"brandbci_data": json.dumps(data)})
 print(f"Published to stream: {stream_id}")
 ```
 
+## Multi-Stream Processing
+
+To process multiple Redis streams, use multiple Redis Source components with the OpenEphys Merger:
+
+### Setup Multiple Sources
+
+1. **Add Multiple Redis Sources**:
+   - Add first Redis Source, configure for `neural_data` stream
+   - Add second Redis Source, configure for `lfp_data` stream
+   - Add third Redis Source, configure for `spike_data` stream
+
+2. **Add Merger Component**:
+   - Add a Merger processor after the Redis Sources
+   - Connect each Redis Source to the Merger
+   - The Merger will combine all streams into a single signal chain
+
+3. **Benefits of This Approach**:
+   - **Simplicity**: Each source handles one stream only
+   - **Reliability**: Failure in one stream doesn't affect others
+   - **Flexibility**: Independent configuration for each stream
+   - **OpenEphys Native**: Uses built-in OpenEphys merging capabilities
+
+### Example Configuration
+
+```yaml
+# BRANDBCI graph with multiple output streams
+nodes:
+  - name: neural_acquisition
+    output_stream: "neural_data"
+
+  - name: lfp_processor
+    output_stream: "lfp_data"
+
+  - name: spike_detector
+    output_stream: "spike_data"
+```
+
 ## Development
 
 ### Building with Stream Support
@@ -245,5 +282,6 @@ For issues and questions:
 
 - **v1.0.0**: Initial Redis stream support
 - **v1.1.0**: BRANDBCI format integration
-- **v1.2.0**: Multi-stream management
+- **v1.2.0**: Multi-stream management (deprecated)
 - **v1.3.0**: Performance optimizations
+- **v2.0.0**: Simplified single-stream architecture, use OpenEphys Merger for multi-stream

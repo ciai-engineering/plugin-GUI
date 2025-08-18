@@ -151,17 +151,7 @@ void RedisDataThreadEditor::createDataControls()
     streamModeButton->addListener(this);
     addAndMakeVisible(streamModeButton.get());
 
-    // Stream Pattern
-    streamPatternLabel = std::make_unique<Label>("Stream Pattern Label", "Pattern:");
-    streamPatternLabel->setBounds(10, 160, 60, 20);
-    streamPatternLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(streamPatternLabel.get());
 
-    streamPatternEditor = std::make_unique<TextEditor>("Stream Pattern Editor");
-    streamPatternEditor->setBounds(75, 160, 130, 20);
-    streamPatternEditor->setText(dataThread->getStreamPattern());
-    streamPatternEditor->addListener(this);
-    addAndMakeVisible(streamPatternEditor.get());
 }
 
 void RedisDataThreadEditor::createStatusControls()
@@ -484,8 +474,7 @@ void RedisDataThreadEditor::showConfigurationDialog()
                      dataThread->getDataFormat() == "binary" ? 1 : 2;
     configDialog.getComboBoxComponent("dataFormat")->setSelectedItemIndex(formatIndex);
 
-    // Add stream settings
-    configDialog.addTextEditor("streamPattern", dataThread->getStreamPattern(), "Stream Pattern:");
+
 
     // Add stream mode toggle (using a combo box since AlertWindow doesn't support toggle buttons)
     configDialog.addComboBox("streamMode", StringArray("List Mode", "Stream Mode"), "Mode:");
@@ -516,8 +505,7 @@ void RedisDataThreadEditor::showConfigurationDialog()
                                selectedFormatIndex == 1 ? "binary" : "brandbci";
         dataThread->setDataFormat(selectedFormat);
 
-        // Apply stream settings
-        dataThread->setStreamPattern(configDialog.getTextEditorContents("streamPattern"));
+
         bool streamMode = configDialog.getComboBoxComponent("streamMode")->getSelectedItemIndex() == 1;
         dataThread->setStreamMode(streamMode);
 

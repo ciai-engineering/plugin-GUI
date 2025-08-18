@@ -98,10 +98,6 @@ public:
 
     /** Stream support methods */
     void setStreamMode(bool useStreams);
-    void setStreamPattern(const String& pattern);
-    Array<String> discoverStreams(const String& pattern = "*");
-    bool subscribeToStream(const String& streamName);
-    void unsubscribeFromStream(const String& streamName);
 
     /** Configuration getters */
     String getRedisHost() const { return redisHost; }
@@ -118,12 +114,9 @@ public:
     /** Configuration validation */
     bool validateConfiguration() const;
     bool validateChannelConfiguration(int channels) const;
-    bool validateStreamPattern(const String& pattern) const;
 
     /** Stream getters */
     bool getStreamMode() const { return useStreamMode; }
-    String getStreamPattern() const { return streamPattern; }
-    Array<String> getActiveStreams() const;
 
 private:
 #ifdef REDIS_ENABLED
@@ -147,11 +140,7 @@ private:
 
     // Stream configuration
     bool useStreamMode;
-    String streamPattern;
-    Array<String> streamPatterns;  // Support multiple patterns
     String currentStreamId;        // Last read stream ID for XREAD
-    Array<String> activeStreams;
-    int maxActiveStreams;          // Limit concurrent streams
 
     // State management
     std::atomic<bool> isAcquiring;
@@ -217,9 +206,9 @@ private:
     bool decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
 
     // Stream methods
-    bool updateBufferFromStreams();
+    bool updateBufferFromStream();
     bool updateBufferFromList(); // Legacy BLPOP method
-    bool readFromStream(const String& streamName, String& data, String& newId);
+    bool readFromStream(String& data, String& newId);
     bool processStreamEntry(redisReply* fieldsReply);
     bool processLegacyStreamEntry(redisReply* fieldsReply);
 
