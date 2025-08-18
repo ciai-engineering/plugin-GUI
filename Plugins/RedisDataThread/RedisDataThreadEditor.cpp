@@ -532,6 +532,9 @@ void RedisDataThreadEditor::showConfigurationDialog()
         LOGD("  - Open Ephys Format: ", openEphysFormat ? "Enabled" : "Disabled");
         LOGD("  - Data Validation: ", dataValidation ? "Enabled" : "Disabled");
 
+        // Trigger processor update to recreate channels and buffers
+        CoreServices::updateSignalChain(getProcessor());
+
         updateSettings();
     }
 }

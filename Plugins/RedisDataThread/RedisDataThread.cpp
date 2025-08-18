@@ -283,7 +283,14 @@ void RedisDataThread::setSampleRate(float rate)
 
 void RedisDataThread::setNumChannels(int channels)
 {
-    numChannels = channels;
+    if (numChannels != channels)
+    {
+        numChannels = channels;
+        LOGD("Number of channels changed to: ", channels);
+
+        // Resize buffers to match new channel count
+        resizeBuffers();
+    }
 }
 
 void RedisDataThread::setDataFormat(const String& format)
