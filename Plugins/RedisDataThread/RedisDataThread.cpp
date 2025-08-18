@@ -258,27 +258,51 @@ bool RedisDataThread::isConnected() const
 
 void RedisDataThread::setRedisHost(const String& host)
 {
-    redisHost = host;
+    if (redisHost != host)
+    {
+        redisHost = host;
+        LOGD("Redis host changed to: ", host);
+    }
 }
 
 void RedisDataThread::setRedisPort(int port)
 {
-    redisPort = port;
+    if (redisPort != port)
+    {
+        redisPort = port;
+        LOGD("Redis port changed to: ", port);
+    }
 }
 
 void RedisDataThread::setRedisPassword(const String& password)
 {
-    redisPassword = password;
+    if (redisPassword != password)
+    {
+        redisPassword = password;
+        LOGD("Redis password ", password.isEmpty() ? "cleared" : "updated");
+    }
 }
 
 void RedisDataThread::setRedisChannel(const String& channel)
 {
-    redisChannel = channel;
+    if (redisChannel != channel)
+    {
+        redisChannel = channel;
+        LOGD("Redis channel changed to: ", channel);
+    }
 }
 
 void RedisDataThread::setSampleRate(float rate)
 {
-    sampleRate = rate;
+    if (sampleRate != rate)
+    {
+        sampleRate = rate;
+        LOGD("Sample rate changed to: ", rate, " Hz");
+
+        // Sample rate change affects the data stream configuration
+        // Note: We don't need to resize buffers for sample rate changes,
+        // but downstream processors need to be notified
+    }
 }
 
 void RedisDataThread::setNumChannels(int channels)
@@ -295,13 +319,17 @@ void RedisDataThread::setNumChannels(int channels)
 
 void RedisDataThread::setDataFormat(const String& format)
 {
-    dataFormat = format;
-
-    // Auto-enable stream mode for BRANDBCI format
-    if (format == "brandbci")
+    if (dataFormat != format)
     {
-        useStreamMode = true;
-        LOGD("Auto-enabled stream mode for BRANDBCI format");
+        dataFormat = format;
+        LOGD("Data format changed to: ", format);
+
+        // Auto-enable stream mode for BRANDBCI format
+        if (format == "brandbci")
+        {
+            useStreamMode = true;
+            LOGD("Auto-enabled stream mode for BRANDBCI format");
+        }
     }
 }
 
@@ -1255,21 +1283,27 @@ bool RedisDataThread::attemptReconnection()
 // Stream management methods
 void RedisDataThread::setStreamMode(bool useStreams)
 {
-    useStreamMode = useStreams;
-    LOGD("Stream mode set to: ", useStreams ? "ENABLED" : "DISABLED");
-
-    if (useStreams && dataFormat == "json")
+    if (useStreamMode != useStreams)
     {
-        // Auto-switch to brandbci format for better stream support
-        dataFormat = "brandbci";
-        LOGD("Auto-switched data format to 'brandbci' for stream mode");
+        useStreamMode = useStreams;
+        LOGD("Stream mode changed to: ", useStreams ? "ENABLED" : "DISABLED");
+
+        if (useStreams && dataFormat == "json")
+        {
+            // Auto-switch to brandbci format for better stream support
+            dataFormat = "brandbci";
+            LOGD("Auto-switched data format to 'brandbci' for stream mode");
+        }
     }
 }
 
 void RedisDataThread::setStreamPattern(const String& pattern)
 {
-    streamPattern = pattern;
-    LOGD("Stream pattern set to: ", pattern);
+    if (streamPattern != pattern)
+    {
+        streamPattern = pattern;
+        LOGD("Stream pattern changed to: ", pattern);
+    }
 }
 
 Array<String> RedisDataThread::discoverStreams(const String& pattern)
