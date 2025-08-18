@@ -39,6 +39,8 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
+    , enableOpenEphysFormat(true)  // Enable by default
+    , enableDataValidation(true)   // Enable validation by default
 {
     LOGD("🚀 RedisDataThread constructor called");
     LOGD("Default configuration:");
@@ -49,6 +51,8 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     LOGD("  - Sample Rate: ", sampleRate);
     LOGD("  - Stream Mode: ", useStreamMode ? "ENABLED" : "DISABLED");
     LOGD("  - Stream Pattern: ", streamPattern);
+    LOGD("  - Open Ephys Format: ", enableOpenEphysFormat ? "ENABLED" : "DISABLED");
+    LOGD("  - Data Validation: ", enableDataValidation ? "ENABLED" : "DISABLED");
     LOGD("  - Redis context: ", (redisCtx ? "initialized" : "null"));
     LOGD("  - Acquiring: ", isAcquiring.load());
     LOGD("  - Connected: ", connectionStatus.load());
@@ -1022,7 +1026,43 @@ bool RedisDataThread::parseBinaryData(const char* data, size_t length, Array<flo
 bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
 {
 #ifdef REDIS_ENABLED
-    // Parse field-value pairs from stream entry
+    // Check if this is Open Ephys format by looking for specific fields
+    bool hasOpenEphysFields = false;
+
+    // Pre-scan to detect format
+    for (size_t i = 0; i < fieldsReply->elements; i += 2)
+    {
+        if (i + 1 < fieldsReply->elements)
+        {
+            String fieldName(fieldsReply->element[i]->str);
+            if (fieldName == "data_shape" || fieldName == "data_dtype" || fieldName == "n_samples")
+            {
+                hasOpenEphysFields = true;
+                break;
+            }
+        }
+    }
+
+    // Route to appropriate processing method
+    if (hasOpenEphysFields && enableOpenEphysFormat)
+    {
+        LOGD("Processing as Open Ephys format");
+        return processOpenEphysStreamEntry(fieldsReply);
+    }
+    else
+    {
+        LOGD("Processing as legacy format");
+        return processLegacyStreamEntry(fieldsReply);
+    }
+#else
+    return false;
+#endif
+}
+
+bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
+{
+#ifdef REDIS_ENABLED
+    // Legacy processing logic (original implementation)
     for (size_t i = 0; i < fieldsReply->elements; i += 2)
     {
         if (i + 1 < fieldsReply->elements)
@@ -1030,7 +1070,7 @@ bool RedisDataThread::processStreamEntry(redisReply* fieldsReply)
             String fieldName(fieldsReply->element[i]->str);
             String fieldValue(fieldsReply->element[i + 1]->str);
 
-            LOGD("Stream field: ", fieldName, " = ", fieldValue.substring(0, 100), "...");
+            LOGD("Legacy stream field: ", fieldName, " = ", fieldValue.substring(0, 100), "...");
 
             // Process different field types
             if (fieldName == "brandbci_data" || fieldName == "data")
@@ -1344,4 +1384,590 @@ void RedisDataThread::unsubscribeFromStream(const String& streamName)
 Array<String> RedisDataThread::getActiveStreams() const
 {
     return activeStreams;
+}
+
+// ============================================================================
+// Open Ephys Format Processing Methods
+// ============================================================================
+
+bool RedisDataThread::processOpenEphysStreamEntry(redisReply* fieldsReply)
+{
+#ifdef REDIS_ENABLED
+    OpenEphysStreamData streamData = {};
+
+    LOGD("Processing Open Ephys stream entry with ", fieldsReply->elements / 2, " fields");
+
+    // Parse all fields
+    for (size_t i = 0; i < fieldsReply->elements; i += 2)
+    {
+        if (i + 1 < fieldsReply->elements)
+        {
+            redisReply* keyReply = fieldsReply->element[i];
+            redisReply* valueReply = fieldsReply->element[i + 1];
+
+            String fieldName(keyReply->str);
+
+            if (fieldName == "run")
+            {
+                streamData.run = String(valueReply->str).getIntValue();
+                LOGD("  run: ", streamData.run);
+            }
+            else if (fieldName == "timestamp")
+            {
+                streamData.timestamp = String(valueReply->str).getDoubleValue();
+                LOGD("  timestamp: ", streamData.timestamp);
+            }
+            else if (fieldName == "sample_rate")
+            {
+                streamData.sample_rate = String(valueReply->str).getIntValue();
+                LOGD("  sample_rate: ", streamData.sample_rate);
+            }
+            else if (fieldName == "n_channels")
+            {
+                streamData.n_channels = String(valueReply->str).getIntValue();
+                LOGD("  n_channels: ", streamData.n_channels);
+            }
+            else if (fieldName == "n_samples")
+            {
+                streamData.n_samples = String(valueReply->str).getIntValue();
+                LOGD("  n_samples: ", streamData.n_samples);
+            }
+            else if (fieldName == "data")
+            {
+                // ✅ Correct: Handle binary data directly, don't convert to string
+                streamData.binary_data = valueReply->str;
+                streamData.data_length = valueReply->len;
+                LOGD("  data: ", streamData.data_length, " bytes of binary data");
+            }
+            else if (fieldName == "data_shape")
+            {
+                streamData.data_shape = String(valueReply->str);
+                LOGD("  data_shape: ", streamData.data_shape);
+            }
+            else if (fieldName == "data_dtype")
+            {
+                streamData.data_dtype = String(valueReply->str);
+                LOGD("  data_dtype: ", streamData.data_dtype);
+            }
+            else
+            {
+                LOGD("  unknown field: ", fieldName);
+            }
+        }
+    }
+
+    // Validate and process the parsed data
+    if (streamData.isValid())
+    {
+        return processOpenEphysData(streamData);
+    }
+    else
+    {
+        LOGE("Invalid or incomplete Open Ephys stream data");
+        return false;
+    }
+#else
+    return false;
+#endif
+}
+
+bool RedisDataThread::processOpenEphysData(const OpenEphysStreamData& data)
+{
+    LOGD("Processing Open Ephys data: ", data.n_samples, " samples, ",
+         data.n_channels, " channels, type: ", data.data_dtype);
+
+    // 1. Validate data if enabled
+    if (enableDataValidation && !validateStreamData(data))
+    {
+        LOGE("Open Ephys stream data validation failed");
+        return false;
+    }
+
+    // 2. Parse data shape
+    Array<int> shape = parseDataShape(data.data_shape);
+    if (shape.size() != 2)
+    {
+        LOGE("Invalid data shape format: ", data.data_shape);
+        return false;
+    }
+
+    // Verify shape consistency with metadata
+    // Support both [samples, channels] and [channels, samples] formats
+    bool isValidShape = false;
+    bool needsTranspose = false;
+
+    if (shape[0] == data.n_samples && shape[1] == data.n_channels)
+    {
+        // Standard format: [samples, channels]
+        isValidShape = true;
+        needsTranspose = false;
+        LOGD("Data format: [samples, channels] = [", shape[0], ", ", shape[1], "]");
+    }
+    else if (shape[0] == data.n_channels && shape[1] == data.n_samples)
+    {
+        // Alternative format: [channels, samples] - needs transpose
+        isValidShape = true;
+        needsTranspose = true;
+        LOGD("Data format: [channels, samples] = [", shape[0], ", ", shape[1], "] - will transpose");
+    }
+
+    if (!isValidShape)
+    {
+        LOGE("Shape mismatch: shape=", data.data_shape,
+             " vs metadata=[", data.n_samples, ",", data.n_channels, "]");
+        return false;
+    }
+
+    // 3. Decode binary data
+    Array<float> channelData;
+    if (!decodeBinaryData(data.binary_data, data.data_length,
+                         data.data_dtype, shape, channelData))
+    {
+        LOGE("Failed to decode binary data");
+        return false;
+    }
+
+    // 4. Verify decoded data size
+    int expectedSize = data.n_channels * data.n_samples;
+    if (channelData.size() != expectedSize)
+    {
+        LOGE("Decoded data size mismatch: expected ", expectedSize,
+             ", got ", channelData.size());
+        return false;
+    }
+
+    // 5. Transpose data if needed (from [channels, samples] to [samples, channels])
+    if (needsTranspose)
+    {
+        LOGD("Transposing data from [channels, samples] to [samples, channels]");
+        Array<float> transposedData;
+        transposedData.ensureStorageAllocated(channelData.size());
+
+        // Transpose: input[channel][sample] -> output[sample][channel]
+        for (int sample = 0; sample < data.n_samples; sample++)
+        {
+            for (int channel = 0; channel < data.n_channels; channel++)
+            {
+                int inputIndex = channel * data.n_samples + sample;  // [channels, samples] indexing
+                transposedData.add(channelData[inputIndex]);
+            }
+        }
+
+        channelData = std::move(transposedData);
+        LOGD("Data transposition completed");
+    }
+
+    LOGD("Successfully processed ", channelData.size(), " data points");
+
+    // 5. Add to data buffer
+    return addMultiSampleDataToBuffer(channelData, data.n_channels,
+                                    data.n_samples, data.timestamp,
+                                    data.sample_rate);
+}
+
+bool RedisDataThread::validateStreamData(const OpenEphysStreamData& data)
+{
+    // Basic field validation
+    if (data.n_channels <= 0)
+    {
+        LOGE("Invalid channel count: ", data.n_channels);
+        return false;
+    }
+
+    if (data.n_samples <= 0)
+    {
+        LOGE("Invalid sample count: ", data.n_samples);
+        return false;
+    }
+
+    if (data.sample_rate <= 0)
+    {
+        LOGE("Invalid sample rate: ", data.sample_rate);
+        return false;
+    }
+
+    // Binary data validation
+    if (!data.binary_data || data.data_length == 0)
+    {
+        LOGE("Missing or empty binary data");
+        return false;
+    }
+
+    // Metadata validation
+    if (data.data_shape.isEmpty())
+    {
+        LOGE("Missing data shape information");
+        return false;
+    }
+
+    if (data.data_dtype.isEmpty())
+    {
+        LOGE("Missing data type information");
+        return false;
+    }
+
+    // Data type validation
+    Array<String> supportedTypes = {"float32", "<f4", "float64", "<f8",
+                                   "int16", "<i2", "int32", "<i4", "uint16", "<u2"};
+    if (!supportedTypes.contains(data.data_dtype))
+    {
+        LOGE("Unsupported data type: ", data.data_dtype);
+        return false;
+    }
+
+    // Data shape validation
+    Array<int> shape = parseDataShape(data.data_shape);
+    if (shape.size() != 2)
+    {
+        LOGE("Invalid data shape format");
+        return false;
+    }
+
+    // Support both [samples, channels] and [channels, samples] formats
+    bool isValidShape = (shape[0] == data.n_samples && shape[1] == data.n_channels) ||
+                       (shape[0] == data.n_channels && shape[1] == data.n_samples);
+
+    if (!isValidShape)
+    {
+        LOGE("Shape-metadata mismatch: shape=[", shape[0], ",", shape[1],
+             "] vs metadata=[", data.n_samples, ",", data.n_channels, "]");
+        return false;
+    }
+
+    // Data size validation
+    size_t expectedSize = calculateExpectedDataSize(data.data_dtype, shape);
+    if (data.data_length != expectedSize)
+    {
+        LOGE("Data size mismatch: expected ", expectedSize,
+             " bytes, got ", data.data_length);
+        return false;
+    }
+
+    // Reasonableness checks
+    if (data.n_channels > 1024)
+    {
+        LOGD("Warning: Unusually high channel count: ", data.n_channels);
+    }
+
+    if (data.n_samples > 10000)
+    {
+        LOGD("Warning: Unusually high sample count: ", data.n_samples);
+    }
+
+    LOGD("Open Ephys stream data validation passed");
+    return true;
+}
+
+Array<int> RedisDataThread::parseDataShape(const String& shapeStr)
+{
+    Array<int> shape;
+
+    try
+    {
+        // Parse JSON format shape information, e.g., "[1000, 96]"
+        var shapeJson = JSON::parse(shapeStr);
+        if (shapeJson.isArray())
+        {
+            for (int i = 0; i < shapeJson.size(); i++)
+            {
+                if (shapeJson[i].isInt())
+                {
+                    int dimension = (int)shapeJson[i];
+                    if (dimension > 0)
+                    {
+                        shape.add(dimension);
+                    }
+                    else
+                    {
+                        LOGE("Invalid dimension value: ", dimension);
+                        return Array<int>(); // Return empty array for error
+                    }
+                }
+            }
+        }
+        else
+        {
+            LOGE("Data shape is not a JSON array: ", shapeStr);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("Failed to parse data shape JSON: ", shapeStr, " - ", e.what());
+    }
+    catch (...)
+    {
+        LOGE("Unknown error parsing data shape: ", shapeStr);
+    }
+
+    // Validate shape reasonableness
+    if (shape.size() == 2)
+    {
+        LOGD("Parsed data shape: [", shape[0], ", ", shape[1], "]");
+    }
+    else
+    {
+        LOGE("Invalid shape dimensions: expected 2D, got ", shape.size(), "D");
+        return Array<int>(); // Return empty array for error
+    }
+
+    return shape;
+}
+
+size_t RedisDataThread::calculateExpectedDataSize(const String& dtype, const Array<int>& shape)
+{
+    int totalElements = 1;
+    for (int dim : shape)
+    {
+        totalElements *= dim;
+    }
+
+    size_t elementSize = 0;
+    if (dtype == "float32" || dtype == "<f4")
+    {
+        elementSize = sizeof(float);
+    }
+    else if (dtype == "float64" || dtype == "<f8")
+    {
+        elementSize = sizeof(double);
+    }
+    else if (dtype == "int16" || dtype == "<i2")
+    {
+        elementSize = sizeof(int16);
+    }
+    else if (dtype == "int32" || dtype == "<i4")
+    {
+        elementSize = sizeof(int32);
+    }
+    else if (dtype == "uint16" || dtype == "<u2")
+    {
+        elementSize = sizeof(uint16);
+    }
+
+    return totalElements * elementSize;
+}
+
+bool RedisDataThread::decodeBinaryData(const char* data, size_t length, const String& dtype,
+                                     const Array<int>& shape, Array<float>& output)
+{
+    output.clear();
+
+    // Calculate expected number of elements
+    int totalElements = 1;
+    for (int dim : shape)
+    {
+        totalElements *= dim;
+    }
+
+    LOGD("Decoding binary data: type=", dtype, ", elements=", totalElements, ", bytes=", length);
+
+    // Route to appropriate decoder based on data type
+    if (dtype == "float32" || dtype == "<f4")
+    {
+        return decodeFloat32(data, length, totalElements, output);
+    }
+    else if (dtype == "float64" || dtype == "<f8")
+    {
+        return decodeFloat64(data, length, totalElements, output);
+    }
+    else if (dtype == "int16" || dtype == "<i2")
+    {
+        return decodeInt16(data, length, totalElements, output);
+    }
+    else if (dtype == "int32" || dtype == "<i4")
+    {
+        return decodeInt32(data, length, totalElements, output);
+    }
+    else if (dtype == "uint16" || dtype == "<u2")
+    {
+        return decodeUInt16(data, length, totalElements, output);
+    }
+    else
+    {
+        LOGE("Unsupported data type: ", dtype);
+        return false;
+    }
+}
+
+bool RedisDataThread::decodeFloat32(const char* data, size_t length, int expectedElements, Array<float>& output)
+{
+    // Validate data length
+    if (length != expectedElements * sizeof(float))
+    {
+        LOGE("Float32 data length mismatch: expected ",
+             expectedElements * sizeof(float), " bytes, got ", length);
+        return false;
+    }
+
+    // Direct copy (most efficient for float32)
+    const float* floatData = reinterpret_cast<const float*>(data);
+    output.ensureStorageAllocated(expectedElements);
+
+    for (int i = 0; i < expectedElements; i++)
+    {
+        output.add(floatData[i]);
+    }
+
+    LOGD("Decoded ", expectedElements, " float32 values");
+    return true;
+}
+
+bool RedisDataThread::decodeFloat64(const char* data, size_t length, int expectedElements, Array<float>& output)
+{
+    if (length != expectedElements * sizeof(double))
+    {
+        LOGE("Float64 data length mismatch: expected ",
+             expectedElements * sizeof(double), " bytes, got ", length);
+        return false;
+    }
+
+    const double* doubleData = reinterpret_cast<const double*>(data);
+    output.ensureStorageAllocated(expectedElements);
+
+    for (int i = 0; i < expectedElements; i++)
+    {
+        output.add(static_cast<float>(doubleData[i]));
+    }
+
+    LOGD("Decoded ", expectedElements, " float64 values (converted to float32)");
+    return true;
+}
+
+bool RedisDataThread::decodeInt16(const char* data, size_t length, int expectedElements, Array<float>& output)
+{
+    if (length != expectedElements * sizeof(int16))
+    {
+        LOGE("Int16 data length mismatch: expected ",
+             expectedElements * sizeof(int16), " bytes, got ", length);
+        return false;
+    }
+
+    const int16* intData = reinterpret_cast<const int16*>(data);
+    output.ensureStorageAllocated(expectedElements);
+
+    // Optional: apply scale factor (configurable)
+    float scaleFactor = 1.0f; // Can be made configurable later
+
+    for (int i = 0; i < expectedElements; i++)
+    {
+        output.add(static_cast<float>(intData[i]) * scaleFactor);
+    }
+
+    LOGD("Decoded ", expectedElements, " int16 values with scale factor ", scaleFactor);
+    return true;
+}
+
+bool RedisDataThread::decodeInt32(const char* data, size_t length, int expectedElements, Array<float>& output)
+{
+    if (length != expectedElements * sizeof(int32))
+    {
+        LOGE("Int32 data length mismatch: expected ",
+             expectedElements * sizeof(int32), " bytes, got ", length);
+        return false;
+    }
+
+    const int32* intData = reinterpret_cast<const int32*>(data);
+    output.ensureStorageAllocated(expectedElements);
+
+    for (int i = 0; i < expectedElements; i++)
+    {
+        output.add(static_cast<float>(intData[i]));
+    }
+
+    LOGD("Decoded ", expectedElements, " int32 values");
+    return true;
+}
+
+bool RedisDataThread::decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output)
+{
+    if (length != expectedElements * sizeof(uint16))
+    {
+        LOGE("UInt16 data length mismatch: expected ",
+             expectedElements * sizeof(uint16), " bytes, got ", length);
+        return false;
+    }
+
+    const uint16* uintData = reinterpret_cast<const uint16*>(data);
+    output.ensureStorageAllocated(expectedElements);
+
+    for (int i = 0; i < expectedElements; i++)
+    {
+        output.add(static_cast<float>(uintData[i]));
+    }
+
+    LOGD("Decoded ", expectedElements, " uint16 values");
+    return true;
+}
+
+bool RedisDataThread::addMultiSampleDataToBuffer(const Array<float>& channelData,
+                                                int nChannels, int nSamples,
+                                                double baseTimestamp, int sampleRate)
+{
+    // Validate data size
+    if (channelData.size() != nChannels * nSamples)
+    {
+        LOGE("Channel data size mismatch: expected ", nChannels * nSamples,
+             ", got ", channelData.size());
+        return false;
+    }
+
+    if (sourceBuffers.size() == 0)
+    {
+        LOGE("No source buffers available");
+        return false;
+    }
+
+    DataBuffer* buffer = sourceBuffers[0];
+    if (!buffer)
+    {
+        LOGE("DataBuffer is null - cannot add data");
+        return false;
+    }
+
+    LOGD("Processing ", nSamples, " samples with ", nChannels, " channels each");
+
+    // Process samples one by one
+    for (int sample = 0; sample < nSamples; sample++)
+    {
+        // Extract current sample's channel data
+        Array<float> sampleData;
+        sampleData.ensureStorageAllocated(nChannels);
+
+        // Assume data format is [samples, channels] (row-major)
+        for (int ch = 0; ch < nChannels; ch++)
+        {
+            int index = sample * nChannels + ch;
+            sampleData.add(channelData[index]);
+        }
+
+        // Calculate timestamp (assuming uniform sampling)
+        int64 sampleNumber = currentSampleNumber.load() + sample;
+        double timestamp = baseTimestamp + (sample / (double)sampleRate);
+        uint64 eventCode = 0;
+
+        // Add to buffer
+        int written = buffer->addToBuffer(sampleData.getRawDataPointer(),
+                                        &sampleNumber,
+                                        &timestamp,
+                                        &eventCode,
+                                        1);
+
+        if (written <= 0)
+        {
+            LOGE("Failed to write sample ", sample, " to buffer");
+            return false;
+        }
+
+        // Log progress every 100 samples
+        if (sample % 100 == 0 && sample > 0)
+        {
+            LOGD("Processed ", sample, "/", nSamples, " samples");
+        }
+    }
+
+    // Update sample counter
+    currentSampleNumber += nSamples;
+
+    LOGD("Successfully added ", nSamples, " samples to buffer. Total samples: ",
+         currentSampleNumber.load());
+    return true;
 }

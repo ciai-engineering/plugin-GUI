@@ -149,16 +149,68 @@ private:
     // Sample counting
     std::atomic<int64> currentSampleNumber;
 
-    // Data parsing methods
+    // Open Ephys stream data structure
+    struct OpenEphysStreamData {
+        int run = 0;
+        double timestamp = 0.0;
+        int sample_rate = 0;
+        int n_channels = 0;
+        int n_samples = 0;
+        const char* binary_data = nullptr;
+        size_t data_length = 0;
+        String data_shape;
+        String data_dtype;
+
+        bool isValid() const {
+            return n_channels > 0 && n_samples > 0 &&
+                   sample_rate > 0 && binary_data != nullptr &&
+                   data_length > 0 && !data_shape.isEmpty() &&
+                   !data_dtype.isEmpty();
+        }
+    };
+
+    // Configuration for Open Ephys format support
+    bool enableOpenEphysFormat;
+    bool enableDataValidation;
+
+public:
+    // Configuration getters and setters
+    void setOpenEphysFormatEnabled(bool enabled) { enableOpenEphysFormat = enabled; }
+    void setDataValidationEnabled(bool enabled) { enableDataValidation = enabled; }
+    bool isOpenEphysFormatEnabled() const { return enableOpenEphysFormat; }
+    bool isDataValidationEnabled() const { return enableDataValidation; }
+
+private:
+
+    // Data parsing methods (legacy)
     bool parseJsonData(const String& jsonStr, Array<float>& channelData);
     bool parseBinaryData(const char* data, size_t length, Array<float>& channelData);
     bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
+
+    // New Open Ephys format methods
+    bool processOpenEphysStreamEntry(redisReply* fieldsReply);
+    bool processOpenEphysData(const OpenEphysStreamData& data);
+    bool validateStreamData(const OpenEphysStreamData& data);
+    Array<int> parseDataShape(const String& shapeStr);
+    bool decodeBinaryData(const char* data, size_t length, const String& dtype,
+                         const Array<int>& shape, Array<float>& output);
+    bool addMultiSampleDataToBuffer(const Array<float>& channelData, int nChannels,
+                                  int nSamples, double baseTimestamp, int sampleRate);
+    size_t calculateExpectedDataSize(const String& dtype, const Array<int>& shape);
+
+    // Binary data decoders
+    bool decodeFloat32(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeFloat64(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeInt32(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
 
     // Stream methods
     bool updateBufferFromStreams();
     bool updateBufferFromList(); // Legacy BLPOP method
     bool readFromStream(const String& streamName, String& data, String& newId);
     bool processStreamEntry(redisReply* fieldsReply);
+    bool processLegacyStreamEntry(redisReply* fieldsReply);
 
     // Error handling
     void handleRedisError(const String& operation);

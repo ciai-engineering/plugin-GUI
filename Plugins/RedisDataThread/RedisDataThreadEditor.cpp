@@ -491,6 +491,13 @@ void RedisDataThreadEditor::showConfigurationDialog()
     configDialog.addComboBox("streamMode", StringArray("List Mode", "Stream Mode"), "Mode:");
     configDialog.getComboBoxComponent("streamMode")->setSelectedItemIndex(dataThread->getStreamMode() ? 1 : 0);
 
+    // Add Open Ephys format settings
+    configDialog.addComboBox("openEphysFormat", StringArray("Disabled", "Enabled"), "Open Ephys Format:");
+    configDialog.getComboBoxComponent("openEphysFormat")->setSelectedItemIndex(dataThread->isOpenEphysFormatEnabled() ? 1 : 0);
+
+    configDialog.addComboBox("dataValidation", StringArray("Disabled", "Enabled"), "Data Validation:");
+    configDialog.getComboBoxComponent("dataValidation")->setSelectedItemIndex(dataThread->isDataValidationEnabled() ? 1 : 0);
+
     configDialog.addButton("OK", 1, KeyPress(KeyPress::returnKey));
     configDialog.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
 
@@ -513,6 +520,17 @@ void RedisDataThreadEditor::showConfigurationDialog()
         dataThread->setStreamPattern(configDialog.getTextEditorContents("streamPattern"));
         bool streamMode = configDialog.getComboBoxComponent("streamMode")->getSelectedItemIndex() == 1;
         dataThread->setStreamMode(streamMode);
+
+        // Apply Open Ephys format settings
+        bool openEphysFormat = configDialog.getComboBoxComponent("openEphysFormat")->getSelectedItemIndex() == 1;
+        dataThread->setOpenEphysFormatEnabled(openEphysFormat);
+
+        bool dataValidation = configDialog.getComboBoxComponent("dataValidation")->getSelectedItemIndex() == 1;
+        dataThread->setDataValidationEnabled(dataValidation);
+
+        LOGD("Configuration updated:");
+        LOGD("  - Open Ephys Format: ", openEphysFormat ? "Enabled" : "Disabled");
+        LOGD("  - Data Validation: ", dataValidation ? "Enabled" : "Disabled");
 
         updateSettings();
     }
@@ -555,3 +573,5 @@ void RedisDataThreadEditor::showLatestData()
     // Show popup using the PopupManager
     CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
 }
+
+
