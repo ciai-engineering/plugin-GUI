@@ -107,11 +107,18 @@ public:
     String getRedisHost() const { return redisHost; }
     int getRedisPort() const { return redisPort; }
     String getRedisPassword() const { return redisPassword; }
-    String getRedisChannel() const { return redisChannel; }
+    String getRedisChannelName() const { return redisChannelName; }  // Updated name
     float getSampleRate() const { return sampleRate; }
-    int getNumChannels() const { return numChannels; }
+    int getNumDataChannels() const { return numDataChannels; }       // Updated name
+    int getMaxDataChannels() const { return maxDataChannels; }
     String getDataFormat() const { return dataFormat; }
     String getConnectionStatus() const;
+    bool isAutoDetectChannelsEnabled() const { return autoDetectChannels; }
+
+    /** Configuration validation */
+    bool validateConfiguration() const;
+    bool validateChannelConfiguration(int channels) const;
+    bool validateStreamPattern(const String& pattern) const;
 
     /** Stream getters */
     bool getStreamMode() const { return useStreamMode; }
@@ -129,18 +136,22 @@ private:
     String redisHost;
     int redisPort;
     String redisPassword;
-    String redisChannel;
+    String redisChannelName;  // Renamed for clarity: Redis channel/topic name
 
     // Data configuration
     float sampleRate;
-    int numChannels;
-    String dataFormat; // "json", "binary", "brandbci"
+    int numDataChannels;      // Renamed for clarity: number of data channels
+    int maxDataChannels;      // Maximum supported channels
+    String dataFormat;        // "json", "binary", "brandbci"
+    bool autoDetectChannels;  // Auto-detect channel count from data
 
     // Stream configuration
     bool useStreamMode;
     String streamPattern;
-    String currentStreamId; // Last read stream ID for XREAD
+    Array<String> streamPatterns;  // Support multiple patterns
+    String currentStreamId;        // Last read stream ID for XREAD
     Array<String> activeStreams;
+    int maxActiveStreams;          // Limit concurrent streams
 
     // State management
     std::atomic<bool> isAcquiring;

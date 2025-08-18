@@ -92,7 +92,7 @@ void RedisDataThreadEditor::createConnectionControls()
 
     channelEditor = std::make_unique<TextEditor>("Channel Editor");
     channelEditor->setBounds(75, 80, 130, 20);
-    channelEditor->setText(dataThread->getRedisChannel());
+    channelEditor->setText(dataThread->getRedisChannelName());  // Updated method name
     channelEditor->addListener(this);
     addAndMakeVisible(channelEditor.get());
 }
@@ -119,7 +119,7 @@ void RedisDataThreadEditor::createDataControls()
 
     numChannelsEditor = std::make_unique<TextEditor>("Num Channels Editor");
     numChannelsEditor->setBounds(240, 110, 50, 20);
-    numChannelsEditor->setText(String(dataThread->getNumChannels()));
+    numChannelsEditor->setText(String(dataThread->getNumDataChannels()));  // Updated method name
     numChannelsEditor->addListener(this);
     addAndMakeVisible(numChannelsEditor.get());
 
@@ -401,9 +401,9 @@ void RedisDataThreadEditor::updateSettings()
 {
     // Update connection info display
     String connectionInfo = "Redis: " + dataThread->getRedisHost() + ":" + String(dataThread->getRedisPort());
-    if (!dataThread->getRedisChannel().isEmpty())
+    if (!dataThread->getRedisChannelName().isEmpty())  // Updated method name
     {
-        connectionInfo += " (" + dataThread->getRedisChannel() + ")";
+        connectionInfo += " (" + dataThread->getRedisChannelName() + ")";  // Updated method name
     }
     connectionInfoLabel->setText(connectionInfo, dontSendNotification);
 
@@ -440,7 +440,7 @@ bool RedisDataThreadEditor::validateSettings()
     }
 
     // Validate channel
-    if (dataThread->getRedisChannel().isEmpty())
+    if (dataThread->getRedisChannelName().isEmpty())
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Channel cannot be empty.");
         return false;
@@ -455,7 +455,7 @@ bool RedisDataThreadEditor::validateSettings()
     }
 
     // Validate number of channels
-    int numChannels = dataThread->getNumChannels();
+    int numChannels = dataThread->getNumDataChannels();
     if (numChannels <= 0 || numChannels > 1024)
     {
         AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings", "Number of channels must be between 1 and 1024.");
@@ -475,9 +475,9 @@ void RedisDataThreadEditor::showConfigurationDialog()
     configDialog.addTextEditor("host", dataThread->getRedisHost(), "Host:");
     configDialog.addTextEditor("port", String(dataThread->getRedisPort()), "Port:");
     configDialog.addTextEditor("password", dataThread->getRedisPassword(), "Password:");
-    configDialog.addTextEditor("channel", dataThread->getRedisChannel(), "Channel:");
+    configDialog.addTextEditor("channel", dataThread->getRedisChannelName(), "Channel:");
     configDialog.addTextEditor("sampleRate", String(dataThread->getSampleRate()), "Sample Rate:");
-    configDialog.addTextEditor("numChannels", String(dataThread->getNumChannels()), "Channels:");
+    configDialog.addTextEditor("numChannels", String(dataThread->getNumDataChannels()), "Channels:");
 
     configDialog.addComboBox("dataFormat", StringArray("JSON", "Binary", "BRANDBCI"), "Format:");
     int formatIndex = dataThread->getDataFormat() == "json" ? 0 :

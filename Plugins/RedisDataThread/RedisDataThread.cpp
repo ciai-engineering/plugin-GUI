@@ -29,12 +29,15 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , redisCtx(nullptr)
     , redisHost("localhost")
     , redisPort(6379)
-    , redisChannel("neural_data_primary")
+    , redisChannelName("neural_data_primary")  // Renamed for clarity
     , sampleRate(30000.0f)
-    , numChannels(96)
+    , numDataChannels(32)          // More reasonable default
+    , maxDataChannels(1024)        // Set maximum limit
     , dataFormat("brandbci")
+    , autoDetectChannels(true)     // Enable auto-detection by default
     , useStreamMode(true)
     , streamPattern("neural_*")
+    , maxActiveStreams(10)         // Limit concurrent streams
     , currentStreamId("0-0")
     , isAcquiring(false)
     , connectionStatus(false)
@@ -45,9 +48,21 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     LOGD("🚀 RedisDataThread constructor called");
     LOGD("Default configuration:");
     LOGD("  - Host: ", redisHost, ":", redisPort);
-    LOGD("  - Channel: ", redisChannel);
+    LOGD("  - Channel Name: ", redisChannelName);
     LOGD("  - Format: ", dataFormat);
-    LOGD("  - Channels: ", numChannels);
+    LOGD("  - Data Channels: ", numDataChannels, " (max: ", maxDataChannels, ")");
+    LOGD("  - Auto-detect channels: ", autoDetectChannels ? "enabled" : "disabled");
+    LOGD("  - Stream pattern: ", streamPattern);
+    LOGD("  - Max active streams: ", maxActiveStreams);
+
+    // Initialize stream patterns array
+    streamPatterns.clear();
+    streamPatterns.add(streamPattern);
+
+    // Validate initial configuration
+    if (!validateConfiguration()) {
+        LOGD("Initial configuration validation failed - using safe defaults");
+    }
     LOGD("  - Sample Rate: ", sampleRate);
     LOGD("  - Stream Mode: ", useStreamMode ? "ENABLED" : "DISABLED");
     LOGD("  - Stream Pattern: ", streamPattern);
@@ -168,27 +183,27 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     }
 
     // Test channel access based on mode
-    LOGD("Testing access to Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
+    LOGD("Testing access to Redis channel: ", redisChannelName, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
     redisReply* testReply = nullptr;
     if (useStreamMode)
     {
         // For stream mode, check if key exists and is a stream
-        testReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", redisChannel.toRawUTF8());
+        testReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", redisChannelName.toRawUTF8());
         if (testReply && testReply->type == REDIS_REPLY_STATUS)
         {
             String keyType(testReply->str);
             if (keyType == "stream")
             {
-                LOGD("Redis stream '", redisChannel, "' found and accessible");
+                LOGD("Redis stream '", redisChannelName, "' found and accessible");
             }
             else if (keyType == "none")
             {
-                LOGD("Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
+                LOGD("Redis stream '", redisChannelName, "' does not exist yet (will be created when data arrives)");
             }
             else
             {
-                LOGE("Redis key '", redisChannel, "' exists but is not a stream (type: ", keyType, ")");
+                LOGE("Redis key '", redisChannelName, "' exists but is not a stream (type: ", keyType, ")");
                 freeReplyObject(testReply);
                 disconnectFromRedis();
                 return false;
@@ -196,7 +211,7 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         }
         else
         {
-            LOGE("Cannot check Redis key type for '", redisChannel, "'");
+            LOGE("Cannot check Redis key type for '", redisChannelName, "'");
             if (testReply) freeReplyObject(testReply);
             disconnectFromRedis();
             return false;
@@ -205,10 +220,10 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
     else
     {
         // For list mode, use LLEN
-        testReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
+        testReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannelName.toRawUTF8());
         if (testReply == nullptr || testReply->type == REDIS_REPLY_ERROR)
         {
-            LOGE("Cannot access Redis channel '", redisChannel, "': ", (testReply && testReply->str) ? testReply->str : "unknown error");
+            LOGE("Cannot access Redis channel '", redisChannelName, "': ", (testReply && testReply->str) ? testReply->str : "unknown error");
             if (testReply) freeReplyObject(testReply);
             disconnectFromRedis();
             return false;
@@ -216,7 +231,7 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
         else
         {
             int queueLength = (testReply->type == REDIS_REPLY_INTEGER) ? testReply->integer : -1;
-            LOGD("Redis channel '", redisChannel, "' accessible, current length: ", queueLength);
+            LOGD("Redis channel '", redisChannelName, "' accessible, current length: ", queueLength);
         }
     }
 
@@ -230,7 +245,7 @@ bool RedisDataThread::connectToRedis(const String& host, int port, const String&
 
     LOGD("✓ Successfully connected to Redis server: ", host, ":", port);
     LOGD("✓ Redis connection status set to TRUE");
-    LOGD("✓ Channel: ", redisChannel, ", Format: ", dataFormat, ", Channels: ", numChannels, ", Sample Rate: ", sampleRate);
+    LOGD("✓ Channel: ", redisChannelName, ", Format: ", dataFormat, ", Channels: ", numDataChannels, ", Sample Rate: ", sampleRate);
     return true;
 #else
     LOGE("Redis support not compiled. Install hiredis library and recompile.");
@@ -285,9 +300,9 @@ void RedisDataThread::setRedisPassword(const String& password)
 
 void RedisDataThread::setRedisChannel(const String& channel)
 {
-    if (redisChannel != channel)
+    if (redisChannelName != channel)
     {
-        redisChannel = channel;
+        redisChannelName = channel;
         LOGD("Redis channel changed to: ", channel);
     }
 }
@@ -307,9 +322,9 @@ void RedisDataThread::setSampleRate(float rate)
 
 void RedisDataThread::setNumChannels(int channels)
 {
-    if (numChannels != channels)
+    if (numDataChannels != channels)
     {
-        numChannels = channels;
+        numDataChannels = channels;
         LOGD("Number of channels changed to: ", channels);
 
         // Resize buffers to match new channel count
@@ -356,7 +371,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         return records;
     }
 
-    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannel, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
+    LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannelName, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
     redisReply* reply = nullptr;
 
@@ -364,7 +379,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     {
         // For streams, use XREVRANGE to get latest entries
         reply = (redisReply*)redisCommand(redisCtx,
-            "XREVRANGE %s + - COUNT %d", redisChannel.toRawUTF8(), numRecords);
+            "XREVRANGE %s + - COUNT %d", redisChannelName.toRawUTF8(), numRecords);
     }
     else
     {
@@ -375,7 +390,7 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         int stopIndex = -1;
 
         reply = (redisReply*)redisCommand(redisCtx,
-            "LRANGE %s %d %d", redisChannel.toRawUTF8(), startIndex, stopIndex);
+            "LRANGE %s %d %d", redisChannelName.toRawUTF8(), startIndex, stopIndex);
     }
 
     if (reply == nullptr)
@@ -462,9 +477,9 @@ bool RedisDataThread::startAcquisition()
     LOGD("Connection status: ", connectionStatus.load());
     LOGD("Current acquiring status: ", isAcquiring.load());
     LOGD("Redis host: ", redisHost, ":", redisPort);
-    LOGD("Redis channel: ", redisChannel);
+    LOGD("Redis channel: ", redisChannelName);
     LOGD("Data format: ", dataFormat);
-    LOGD("Expected channels: ", numChannels);
+    LOGD("Expected channels: ", numDataChannels);
     LOGD("Sample rate: ", sampleRate);
 
     if (!isConnected())
@@ -506,15 +521,15 @@ bool RedisDataThread::startAcquisition()
         if (useStreamMode)
         {
             // For streams, check if stream exists and has data
-            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "XLEN %s", redisChannel.toRawUTF8());
+            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "XLEN %s", redisChannelName.toRawUTF8());
             if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
             {
-                LOGD("✓ Redis stream '", redisChannel, "' has ", lenReply->integer, " entries available");
+                LOGD("✓ Redis stream '", redisChannelName, "' has ", lenReply->integer, " entries available");
                 freeReplyObject(lenReply);
             }
             else if (lenReply && lenReply->type == REDIS_REPLY_ERROR)
             {
-                LOGD("✓ Redis stream '", redisChannel, "' does not exist yet (will be created when data arrives)");
+                LOGD("✓ Redis stream '", redisChannelName, "' does not exist yet (will be created when data arrives)");
                 freeReplyObject(lenReply);
             }
             else
@@ -526,10 +541,10 @@ bool RedisDataThread::startAcquisition()
         else
         {
             // For lists, use LLEN
-            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannel.toRawUTF8());
+            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", redisChannelName.toRawUTF8());
             if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
             {
-                LOGD("✓ Redis channel '", redisChannel, "' has ", lenReply->integer, " samples available");
+                LOGD("✓ Redis channel '", redisChannelName, "' has ", lenReply->integer, " samples available");
                 freeReplyObject(lenReply);
             }
             else
@@ -613,7 +628,7 @@ void RedisDataThread::updateSettings(OwnedArray<ContinuousChannel>* continuousCh
     sourceStreams->add(stream);
 
     // Create continuous channels
-    for (int ch = 0; ch < numChannels; ch++)
+    for (int ch = 0; ch < numDataChannels; ch++)
     {
         ContinuousChannel* chan = new ContinuousChannel(ContinuousChannel::Settings{
             ContinuousChannel::Type::ELECTRODE,
@@ -636,10 +651,10 @@ void RedisDataThread::resizeBuffers()
     // Buffer size: 10000 samples should be sufficient for Redis data
     const int bufferSize = 10000;
 
-    DataBuffer* buffer = new DataBuffer(numChannels, bufferSize);
+    DataBuffer* buffer = new DataBuffer(numDataChannels, bufferSize);
     sourceBuffers.add(buffer);
 
-    LOGD("Redis DataThread buffers resized: ", numChannels, " channels, buffer size: ", bufferSize);
+    LOGD("Redis DataThread buffers resized: ", numDataChannels, " channels, buffer size: ", bufferSize);
 }
 
 bool RedisDataThread::updateBuffer()
@@ -701,11 +716,11 @@ bool RedisDataThread::updateBufferFromList()
 {
 #ifdef REDIS_ENABLED
     // Log BLPOP command execution
-    LOGD("Executing BLPOP command on channel: ", redisChannel);
+    LOGD("Executing BLPOP command on channel: ", redisChannelName);
 
     // Get data from Redis (blocking call with 1 second timeout)
     redisReply* reply = (redisReply*)redisCommand(redisCtx,
-        "BLPOP %s 1", redisChannel.toRawUTF8());
+        "BLPOP %s 1", redisChannelName.toRawUTF8());
 
     if (reply == nullptr)
     {
@@ -752,9 +767,9 @@ bool RedisDataThread::updateBufferFromList()
             LOGE("Unknown data format: ", dataFormat);
         }
 
-        if (success && channelData.size() == numChannels)
+        if (success && channelData.size() == numDataChannels)
         {
-            LOGD("Channel data validated: ", channelData.size(), " channels (expected: ", numChannels, ")");
+            LOGD("Channel data validated: ", channelData.size(), " channels (expected: ", numDataChannels, ")");
 
             // Log sample data range
             float minVal = *std::min_element(channelData.begin(), channelData.end());
@@ -806,7 +821,7 @@ bool RedisDataThread::updateBufferFromList()
         }
         else
         {
-            LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numChannels);
+            LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numDataChannels);
         }
     }
     else
@@ -968,11 +983,11 @@ bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channel
         }
 
         int channelCount = channels.size();
-        LOGD("Found channels array with ", channelCount, " elements (expected: ", numChannels, ")");
+        LOGD("Found channels array with ", channelCount, " elements (expected: ", numDataChannels, ")");
 
-        if (channelCount != numChannels)
+        if (channelCount != numDataChannels)
         {
-            LOGE("Channel count mismatch: JSON has ", channelCount, " channels, expected ", numChannels);
+            LOGE("Channel count mismatch: JSON has ", channelCount, " channels, expected ", numDataChannels);
             return false;
         }
 
@@ -1041,9 +1056,9 @@ bool RedisDataThread::parseBinaryData(const char* data, size_t length, Array<flo
     }
 
     int numSamples = length / sizeof(float);
-    if (numSamples != numChannels)
+    if (numSamples != numDataChannels)
     {
-        LOGE("Binary data contains ", numSamples, " samples, expected ", numChannels);
+        LOGE("Binary data contains ", numSamples, " samples, expected ", numDataChannels);
         return false;
     }
 
@@ -1122,7 +1137,7 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
                     parseSuccess = parseJsonData(fieldValue, channelData);
                 }
 
-                if (parseSuccess && channelData.size() == numChannels)
+                if (parseSuccess && channelData.size() == numDataChannels)
                 {
                     // Add data to buffer
                     if (sourceBuffers.size() > 0)
@@ -1145,7 +1160,7 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
                             if (written > 0)
                             {
                                 currentSampleNumber++;
-                                LOGD("Added ", numChannels, " channels to buffer, sample #", currentSampleNumber.load());
+                                LOGD("Added ", numDataChannels, " channels to buffer, sample #", currentSampleNumber.load());
                                 return true;
                             }
                             else
@@ -1161,7 +1176,7 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
                 }
                 else
                 {
-                    LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numChannels);
+                    LOGE("Channel count mismatch: got ", channelData.size(), " channels, expected ", numDataChannels);
                 }
             }
         }
@@ -2010,5 +2025,93 @@ bool RedisDataThread::addMultiSampleDataToBuffer(const Array<float>& channelData
 
     LOGD("Successfully added ", nSamples, " samples to buffer. Total samples: ",
          currentSampleNumber.load());
+    return true;
+}
+
+bool RedisDataThread::validateConfiguration() const
+{
+    // Validate host
+    if (redisHost.isEmpty()) {
+        LOGE("Configuration validation failed: Redis host cannot be empty");
+        return false;
+    }
+
+    // Validate port
+    if (redisPort <= 0 || redisPort > 65535) {
+        LOGE("Configuration validation failed: Redis port must be between 1 and 65535, got: ", redisPort);
+        return false;
+    }
+
+    // Validate channel name
+    if (redisChannelName.isEmpty()) {
+        LOGE("Configuration validation failed: Redis channel name cannot be empty");
+        return false;
+    }
+
+    // Validate sample rate
+    if (sampleRate <= 0.0f || sampleRate > 1000000.0f) {
+        LOGE("Configuration validation failed: Sample rate must be between 0 and 1MHz, got: ", sampleRate);
+        return false;
+    }
+
+    // Validate channel configuration
+    if (!validateChannelConfiguration(numDataChannels)) {
+        return false;
+    }
+
+    // Validate stream pattern
+    if (useStreamMode && !validateStreamPattern(streamPattern)) {
+        return false;
+    }
+
+    // Validate data format
+    if (dataFormat != "json" && dataFormat != "binary" && dataFormat != "brandbci") {
+        LOGE("Configuration validation failed: Unsupported data format: ", dataFormat);
+        return false;
+    }
+
+    LOGD("✓ Configuration validation passed");
+    return true;
+}
+
+bool RedisDataThread::validateChannelConfiguration(int channels) const
+{
+    if (channels <= 0) {
+        LOGE("Channel validation failed: Number of channels must be positive, got: ", channels);
+        return false;
+    }
+
+    if (channels > maxDataChannels) {
+        LOGE("Channel validation failed: Number of channels (", channels,
+             ") exceeds maximum (", maxDataChannels, ")");
+        return false;
+    }
+
+    // Check for reasonable channel counts based on common hardware
+    if (channels > 512) {
+        LOGD("Warning: Large number of channels (", channels, ") - ensure this is correct");
+    }
+
+    return true;
+}
+
+bool RedisDataThread::validateStreamPattern(const String& pattern) const
+{
+    if (pattern.isEmpty()) {
+        LOGE("Stream pattern validation failed: Pattern cannot be empty");
+        return false;
+    }
+
+    // Check for basic pattern validity
+    if (pattern.length() > 256) {
+        LOGE("Stream pattern validation failed: Pattern too long (max 256 characters)");
+        return false;
+    }
+
+    // Check for potentially dangerous patterns
+    if (pattern == "*" && maxActiveStreams > 50) {
+        LOGD("Warning: Wildcard pattern '*' with high stream limit may cause performance issues");
+    }
+
     return true;
 }
