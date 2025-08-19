@@ -44,8 +44,8 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Start timer for status updates
     startTimer(2000); // Update every 2 seconds
 
-    // Set initial size - slightly wider to accommodate the improved layout
-    setSize(420, 620);
+    // Set initial size - increased height to accommodate buttons in groups
+    setSize(420, 680);
 }
 
 RedisConfigurationPanel::~RedisConfigurationPanel()
@@ -67,55 +67,50 @@ void RedisConfigurationPanel::paint(Graphics& g)
 void RedisConfigurationPanel::resized()
 {
     int yPos = 35;
-    int groupHeight = 120;
+    int connectionGroupHeight = 150; // Increased to accommodate Test button
+    int streamGroupHeight = 150;     // Increased to accommodate Data button
+    int formatGroupHeight = 120;     // Keep original height
+    int advancedGroupHeight = 120;   // Keep original height
     int margin = 10;
     int groupSpacing = 15;
-    
+
     // Connection group
     if (connectionGroup)
     {
-        connectionGroup->setBounds(margin, yPos, getWidth() - 2 * margin, groupHeight);
-        yPos += groupHeight + groupSpacing;
+        connectionGroup->setBounds(margin, yPos, getWidth() - 2 * margin, connectionGroupHeight);
+        yPos += connectionGroupHeight + groupSpacing;
     }
-    
+
     // Stream group
     if (streamGroup)
     {
-        streamGroup->setBounds(margin, yPos, getWidth() - 2 * margin, groupHeight);
-        yPos += groupHeight + groupSpacing;
+        streamGroup->setBounds(margin, yPos, getWidth() - 2 * margin, streamGroupHeight);
+        yPos += streamGroupHeight + groupSpacing;
     }
     
     // Format group
     if (formatGroup)
     {
-        formatGroup->setBounds(margin, yPos, getWidth() - 2 * margin, groupHeight);
-        yPos += groupHeight + groupSpacing;
+        formatGroup->setBounds(margin, yPos, getWidth() - 2 * margin, formatGroupHeight);
+        yPos += formatGroupHeight + groupSpacing;
     }
-    
-    // Advanced group (smaller)
+
+    // Advanced group
     if (advancedGroup)
     {
-        advancedGroup->setBounds(margin, yPos, getWidth() - 2 * margin, 100);
-        yPos += 100 + groupSpacing;
+        advancedGroup->setBounds(margin, yPos, getWidth() - 2 * margin, advancedGroupHeight);
+        yPos += advancedGroupHeight + groupSpacing;
     }
     
-    // Control buttons row 1
+    // Control buttons - now in a single row
     if (presetCombo)
         presetCombo->setBounds(margin, yPos, 120, 25);
-    if (testConnectionButton)
-        testConnectionButton->setBounds(margin + 130, yPos, 60, 25);
     if (resetButton)
-        resetButton->setBounds(margin + 200, yPos, 60, 25);
-    if (helpButton)
-        helpButton->setBounds(margin + 270, yPos, 50, 25);
-
-    yPos += 30;
-
-    // Control buttons row 2
+        resetButton->setBounds(margin + 130, yPos, 60, 25);
     if (savePresetButton)
-        savePresetButton->setBounds(margin, yPos, 100, 25);
-    if (dataButton)
-        dataButton->setBounds(margin + 110, yPos, 60, 25);
+        savePresetButton->setBounds(margin + 200, yPos, 100, 25);
+    if (helpButton)
+        helpButton->setBounds(margin + 310, yPos, 50, 25);
 
     yPos += 35;
 
@@ -204,6 +199,14 @@ void RedisConfigurationPanel::createConnectionGroup()
     passwordTooltip->setFont(FontOptions("Inter", "Regular", 10));
     passwordTooltip->setColour(Label::textColourId, Colours::grey);
     connectionGroup->addAndMakeVisible(passwordTooltip.get());
+
+    yOffset += rowHeight + 5; // Add some extra spacing
+
+    // Test connection button
+    testConnectionButton = std::make_unique<UtilityButton>("Test Connection");
+    testConnectionButton->setBounds(15, yOffset, 120, 25);
+    testConnectionButton->addListener(this);
+    connectionGroup->addAndMakeVisible(testConnectionButton.get());
 }
 
 void RedisConfigurationPanel::createStreamGroup()
@@ -253,6 +256,14 @@ void RedisConfigurationPanel::createStreamGroup()
     streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
     streamModeTooltip->setColour(Label::textColourId, Colours::grey);
     streamGroup->addAndMakeVisible(streamModeTooltip.get());
+
+    yOffset += rowHeight + 5; // Add some extra spacing
+
+    // Data button
+    dataButton = std::make_unique<UtilityButton>("View Data");
+    dataButton->setBounds(15, yOffset, 100, 25);
+    dataButton->addListener(this);
+    streamGroup->addAndMakeVisible(dataButton.get());
 }
 
 void RedisConfigurationPanel::textEditorTextChanged(TextEditor& editor)
@@ -479,11 +490,6 @@ void RedisConfigurationPanel::createControlButtons()
     presetCombo->addListener(this);
     addAndMakeVisible(presetCombo.get());
 
-    // Test connection button
-    testConnectionButton = std::make_unique<UtilityButton>("Test");
-    testConnectionButton->addListener(this);
-    addAndMakeVisible(testConnectionButton.get());
-
     // Reset button
     resetButton = std::make_unique<UtilityButton>("Reset");
     resetButton->addListener(this);
@@ -498,11 +504,6 @@ void RedisConfigurationPanel::createControlButtons()
     helpButton = std::make_unique<UtilityButton>("Help");
     helpButton->addListener(this);
     addAndMakeVisible(helpButton.get());
-
-    // Data button
-    dataButton = std::make_unique<UtilityButton>("Data");
-    dataButton->addListener(this);
-    addAndMakeVisible(dataButton.get());
 
     // Status indicators
     validationStatus = std::make_unique<Label>("Validation Status", "All settings valid");

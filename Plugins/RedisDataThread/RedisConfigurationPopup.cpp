@@ -33,8 +33,8 @@ RedisConfigurationPopup::RedisConfigurationPopup(Component* parent, RedisDataThr
     addAndMakeVisible(configPanel.get());
 
     // Set the size to match the configuration panel
-    setSize(420, 620);
-    configPanel->setBounds(0, 0, 420, 620);
+    setSize(420, 680);
+    configPanel->setBounds(0, 0, 420, 680);
 }
 
 RedisConfigurationPopup::~RedisConfigurationPopup()
