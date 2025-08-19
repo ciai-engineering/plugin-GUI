@@ -27,7 +27,9 @@ endif()
 # Always add the main sources
 add_sources(${PLUGIN_NAME} RedisDataThread.cpp RedisDataThread.h
             RedisDataThreadEditor.cpp RedisDataThreadEditor.h
-            RedisDataDisplayPopup.cpp RedisDataDisplayPopup.h)
+            RedisDataDisplayPopup.cpp RedisDataDisplayPopup.h
+            RedisConfigurationPanel.cpp RedisConfigurationPanel.h
+            RedisConfigurationPopup.cpp RedisConfigurationPopup.h)
 
 if(NOT HIREDIS_FOUND)
     message(WARNING "hiredis library not found. RedisDataThread plugin will be built without Redis support.")

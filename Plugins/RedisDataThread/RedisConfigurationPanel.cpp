@@ -43,8 +43,8 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Start timer for status updates
     startTimer(2000); // Update every 2 seconds
 
-    // Set initial size
-    setSize(400, 600);
+    // Set initial size - slightly wider to accommodate the improved layout
+    setSize(420, 620);
 }
 
 RedisConfigurationPanel::~RedisConfigurationPanel()
@@ -154,8 +154,8 @@ void RedisConfigurationPanel::createConnectionGroup()
     hostEditor->addListener(this);
     connectionGroup->addAndMakeVisible(hostEditor.get());
     
-    hostTooltip = std::make_unique<Label>("Host Tooltip", "Redis server address (e.g., localhost, 192.168.1.100)");
-    hostTooltip->setBounds(230, yOffset, tooltipWidth, 20);
+    hostTooltip = std::make_unique<Label>("Host Tooltip", "Server address");
+    hostTooltip->setBounds(230, yOffset, 100, 20);
     hostTooltip->setFont(FontOptions("Inter", "Regular", 10));
     hostTooltip->setColour(Label::textColourId, Colours::grey);
     connectionGroup->addAndMakeVisible(hostTooltip.get());
@@ -175,8 +175,8 @@ void RedisConfigurationPanel::createConnectionGroup()
     portEditor->addListener(this);
     connectionGroup->addAndMakeVisible(portEditor.get());
     
-    portTooltip = std::make_unique<Label>("Port Tooltip", "Redis server port (usually 6379)");
-    portTooltip->setBounds(190, yOffset, tooltipWidth, 20);
+    portTooltip = std::make_unique<Label>("Port Tooltip", "Server port");
+    portTooltip->setBounds(190, yOffset, 80, 20);
     portTooltip->setFont(FontOptions("Inter", "Regular", 10));
     portTooltip->setColour(Label::textColourId, Colours::grey);
     connectionGroup->addAndMakeVisible(portTooltip.get());
@@ -196,8 +196,8 @@ void RedisConfigurationPanel::createConnectionGroup()
     passwordEditor->addListener(this);
     connectionGroup->addAndMakeVisible(passwordEditor.get());
     
-    passwordTooltip = std::make_unique<Label>("Password Tooltip", "Redis authentication password (leave empty if none)");
-    passwordTooltip->setBounds(230, yOffset, tooltipWidth, 20);
+    passwordTooltip = std::make_unique<Label>("Password Tooltip", "Auth password (optional)");
+    passwordTooltip->setBounds(230, yOffset, 120, 20);
     passwordTooltip->setFont(FontOptions("Inter", "Regular", 10));
     passwordTooltip->setColour(Label::textColourId, Colours::grey);
     connectionGroup->addAndMakeVisible(passwordTooltip.get());
@@ -226,8 +226,8 @@ void RedisConfigurationPanel::createStreamGroup()
     channelEditor->addListener(this);
     streamGroup->addAndMakeVisible(channelEditor.get());
     
-    channelTooltip = std::make_unique<Label>("Channel Tooltip", "Redis channel/stream name (e.g., neural_data, openephys_data)");
-    channelTooltip->setBounds(230, yOffset, tooltipWidth, 20);
+    channelTooltip = std::make_unique<Label>("Channel Tooltip", "Channel/stream name");
+    channelTooltip->setBounds(230, yOffset, 120, 20);
     channelTooltip->setFont(FontOptions("Inter", "Regular", 10));
     channelTooltip->setColour(Label::textColourId, Colours::grey);
     streamGroup->addAndMakeVisible(channelTooltip.get());
@@ -245,8 +245,8 @@ void RedisConfigurationPanel::createStreamGroup()
     streamModeButton->addListener(this);
     streamGroup->addAndMakeVisible(streamModeButton.get());
     
-    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "Enable Redis Stream mode (recommended for BRANDBCI)");
-    streamModeTooltip->setBounds(130, yOffset, tooltipWidth + 50, 20);
+    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "Enable for real-time streaming");
+    streamModeTooltip->setBounds(130, yOffset, 160, 20);
     streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
     streamModeTooltip->setColour(Label::textColourId, Colours::grey);
     streamGroup->addAndMakeVisible(streamModeTooltip.get());
@@ -361,8 +361,8 @@ void RedisConfigurationPanel::createFormatGroup()
     sampleRateEditor->addListener(this);
     formatGroup->addAndMakeVisible(sampleRateEditor.get());
 
-    sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "Sampling rate in Hz (e.g., 30000 for 30kHz)");
-    sampleRateTooltip->setBounds(190, yOffset, tooltipWidth, 20);
+    sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "Sampling rate (Hz)");
+    sampleRateTooltip->setBounds(190, yOffset, 100, 20);
     sampleRateTooltip->setFont(FontOptions("Inter", "Regular", 10));
     sampleRateTooltip->setColour(Label::textColourId, Colours::grey);
     formatGroup->addAndMakeVisible(sampleRateTooltip.get());
@@ -382,8 +382,8 @@ void RedisConfigurationPanel::createFormatGroup()
     numChannelsEditor->addListener(this);
     formatGroup->addAndMakeVisible(numChannelsEditor.get());
 
-    numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "Number of channels (1-1024, e.g., 32, 96)");
-    numChannelsTooltip->setBounds(190, yOffset, tooltipWidth, 20);
+    numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "Channel count (1-1024)");
+    numChannelsTooltip->setBounds(190, yOffset, 120, 20);
     numChannelsTooltip->setFont(FontOptions("Inter", "Regular", 10));
     numChannelsTooltip->setColour(Label::textColourId, Colours::grey);
     formatGroup->addAndMakeVisible(numChannelsTooltip.get());
@@ -404,8 +404,8 @@ void RedisConfigurationPanel::createFormatGroup()
     dataFormatCombo->addListener(this);
     formatGroup->addAndMakeVisible(dataFormatCombo.get());
 
-    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "Data format for Redis communication");
-    dataFormatTooltip->setBounds(210, yOffset, tooltipWidth, 20);
+    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "Data encoding format");
+    dataFormatTooltip->setBounds(210, yOffset, 120, 20);
     dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
     dataFormatTooltip->setColour(Label::textColourId, Colours::grey);
     formatGroup->addAndMakeVisible(dataFormatTooltip.get());
@@ -434,8 +434,8 @@ void RedisConfigurationPanel::createAdvancedGroup()
     bufferSizeEditor->addListener(this);
     advancedGroup->addAndMakeVisible(bufferSizeEditor.get());
 
-    bufferSizeTooltip = std::make_unique<Label>("Buffer Size Tooltip", "Buffer size in samples (100-100000)");
-    bufferSizeTooltip->setBounds(210, yOffset, 150, 20);
+    bufferSizeTooltip = std::make_unique<Label>("Buffer Size Tooltip", "Buffer size (samples)");
+    bufferSizeTooltip->setBounds(210, yOffset, 120, 20);
     bufferSizeTooltip->setFont(FontOptions("Inter", "Regular", 10));
     bufferSizeTooltip->setColour(Label::textColourId, Colours::grey);
     advancedGroup->addAndMakeVisible(bufferSizeTooltip.get());
@@ -509,73 +509,109 @@ void RedisConfigurationPanel::createControlButtons()
     addAndMakeVisible(performanceHints.get());
 }
 
+
+
 void RedisConfigurationPanel::setupTooltips()
 {
-    // Set detailed tooltips for all components
-    hostEditor->setTooltip("Redis server hostname or IP address.\n"
+    // Create custom tooltip window for better formatting
+    setupCustomTooltips();
+}
+
+void RedisConfigurationPanel::setupCustomTooltips()
+{
+    // Set detailed tooltips for all components with improved formatting
+    hostEditor->setTooltip("Redis Server Address\n\n"
+                          "Hostname or IP address of the Redis server.\n\n"
                           "Examples:\n"
-                          "• localhost - Local Redis server\n"
-                          "• 192.168.1.100 - Remote server\n"
-                          "• redis.example.com - Domain name");
+                          "* localhost - Local Redis server\n"
+                          "* 192.168.1.100 - Remote server\n"
+                          "* redis.example.com - Domain name\n\n"
+                          "Tip: Use 'localhost' for local development");
 
-    portEditor->setTooltip("Redis server port number (1-65535).\n"
-                          "Default: 6379\n"
-                          "Common alternatives: 6380, 16379");
+    portEditor->setTooltip("Redis Server Port\n\n"
+                          "Port number for Redis server connection (1-65535).\n\n"
+                          "Common ports:\n"
+                          "* 6379 - Default Redis port\n"
+                          "* 6380 - Alternative port\n"
+                          "* 16379 - Redis Cluster port\n\n"
+                          "Tip: Check your Redis configuration file");
 
-    passwordEditor->setTooltip("Redis authentication password.\n"
-                              "Leave empty if Redis AUTH is not configured.\n"
-                              "Required for Redis Cloud or secured instances.");
+    passwordEditor->setTooltip("Redis Authentication\n\n"
+                              "Password for Redis AUTH command.\n\n"
+                              "When to use:\n"
+                              "* Redis Cloud instances\n"
+                              "* Production servers with security\n"
+                              "* Custom Redis configurations\n\n"
+                              "Tip: Leave empty for local development");
 
-    channelEditor->setTooltip("Redis channel or stream name for data.\n"
-                             "Examples:\n"
-                             "• neural_data - BRANDBCI standard\n"
-                             "• openephys_data - Default format\n"
-                             "• lfp_stream - LFP data stream");
+    channelEditor->setTooltip("Redis Channel/Stream Name\n\n"
+                             "Name of the Redis channel or stream for data.\n\n"
+                             "Common names:\n"
+                             "* neural_data - BRANDBCI neural data\n"
+                             "* openephys_data - General purpose\n"
+                             "* lfp_stream - Local field potentials\n"
+                             "* spike_data - Spike events\n\n"
+                             "Tip: Use descriptive names for clarity");
 
-    streamModeButton->setTooltip("Enable Redis Stream mode (XREAD commands).\n"
-                                "Recommended for:\n"
-                                "• BRANDBCI systems\n"
-                                "• Real-time streaming\n"
-                                "• Multiple consumers\n"
-                                "\n"
-                                "Disable for legacy BLPOP mode.");
+    streamModeButton->setTooltip("Redis Stream Mode\n\n"
+                                "Enable Redis Streams (XREAD) vs Lists (BLPOP).\n\n"
+                                "Stream Mode Benefits:\n"
+                                "* Better for real-time data\n"
+                                "* Multiple consumer support\n"
+                                "* Built-in message persistence\n"
+                                "* BRANDBCI compatibility\n\n"
+                                "Tip: Enable for modern applications");
 
-    sampleRateEditor->setTooltip("Expected sampling rate in Hz.\n"
-                                "Common values:\n"
-                                "• 30000 - High-frequency neural data\n"
-                                "• 1000 - LFP or slow signals\n"
-                                "• 2000 - Behavioral data");
+    sampleRateEditor->setTooltip("Sampling Rate (Hz)\n\n"
+                                "Expected data sampling frequency.\n\n"
+                                "Typical rates:\n"
+                                "* 30000 Hz - High-freq neural (spikes)\n"
+                                "* 1000 Hz - LFP/slow signals\n"
+                                "* 2000 Hz - Behavioral data\n"
+                                "* 100 Hz - Event markers\n\n"
+                                "Tip: Match your data source rate");
 
-    numChannelsEditor->setTooltip("Number of data channels per sample.\n"
-                                 "Range: 1-1024\n"
-                                 "Common values:\n"
-                                 "• 32 - Small electrode arrays\n"
-                                 "• 96 - Utah arrays\n"
-                                 "• 128 - High-density probes");
+    numChannelsEditor->setTooltip("Number of Channels\n\n"
+                                 "Data channels per sample (1-1024).\n\n"
+                                 "Common configurations:\n"
+                                 "* 32 - Small arrays/tetrodes\n"
+                                 "* 96 - Utah microelectrode arrays\n"
+                                 "* 128 - High-density silicon probes\n"
+                                 "* 384 - Neuropixels probes\n\n"
+                                 "Tip: Match your electrode count");
 
-    dataFormatCombo->setTooltip("Data format for Redis communication:\n"
-                               "• BRANDBCI - Native BRANDBCI format (recommended)\n"
-                               "• JSON - Human-readable, flexible\n"
-                               "• Binary - Highest performance, compact");
+    dataFormatCombo->setTooltip("Data Encoding Format\n\n"
+                               "Choose the data format for Redis communication.\n\n"
+                               "Format options:\n"
+                               "* BRANDBCI - Native format, best integration\n"
+                               "* JSON - Human-readable, flexible parsing\n"
+                               "* Binary - Highest performance, compact size\n\n"
+                               "Tip: Use BRANDBCI for neural data systems");
 
-    bufferSizeEditor->setTooltip("Internal buffer size in samples.\n"
-                                "Range: 100-100000\n"
-                                "Guidelines:\n"
-                                "• 500-2000: Real-time, low latency\n"
-                                "• 3000-10000: Balanced performance\n"
-                                "• 10000+: High throughput, higher latency");
+    bufferSizeEditor->setTooltip("Buffer Size (Samples)\n\n"
+                                "Internal buffer size for data processing.\n\n"
+                                "Performance guidelines:\n"
+                                "* 500-2000 - Real-time, low latency\n"
+                                "* 3000-10000 - Balanced performance\n"
+                                "* 10000+ - High throughput mode\n\n"
+                                "Tip: Smaller = lower latency, Larger = more stable");
 
-    openEphysFormatButton->setTooltip("Enable Open Ephys native format support.\n"
-                                     "Provides better integration with\n"
-                                     "Open Ephys signal processing chain.");
+    openEphysFormatButton->setTooltip("Open Ephys Format\n\n"
+                                     "Enable native Open Ephys format support.\n\n"
+                                     "Benefits:\n"
+                                     "* Better signal chain integration\n"
+                                     "* Optimized data processing\n"
+                                     "* Native metadata support\n\n"
+                                     "Tip: Enable for best Open Ephys compatibility");
 
-    dataValidationButton->setTooltip("Enable real-time data validation.\n"
-                                    "Checks for:\n"
-                                    "• Correct channel count\n"
-                                    "• Valid data ranges\n"
-                                    "• Format consistency\n"
-                                    "\n"
-                                    "Disable for maximum performance.");
+    dataValidationButton->setTooltip("Data Validation\n\n"
+                                    "Enable real-time data validation checks.\n\n"
+                                    "Validation includes:\n"
+                                    "* Correct channel count\n"
+                                    "* Valid data ranges\n"
+                                    "* Format consistency\n"
+                                    "* Error detection\n\n"
+                                    "Tip: Disable for maximum performance");
 }
 
 void RedisConfigurationPanel::setupPresets()

@@ -28,6 +28,7 @@
 
 class RedisDataThread;
 class RedisConfigurationPanel;
+class RedisConfigurationPopup;
 
 /**
  * Custom editor for the RedisDataThread
@@ -39,7 +40,8 @@ class TESTABLE RedisDataThreadEditor : public GenericEditor,
                                        public TextEditor::Listener,
                                        public ComboBox::Listener,
                                        public Button::Listener,
-                                       public Timer
+                                       public Timer,
+                                       public ComponentListener
 {
 public:
     /** Constructor */
@@ -66,15 +68,15 @@ public:
     /** Timer interface for status updates */
     void timerCallback() override;
 
+    /** ComponentListener interface */
+    void componentBeingDeleted(Component& component) override;
+
     /** Updates the UI with current settings */
     void updateSettings();
 
     /** Called when acquisition starts/stops */
     void startAcquisition() override;
     void stopAcquisition() override;
-
-    /** Show enhanced configuration dialog */
-    void showEnhancedConfigurationDialog();
 
 private:
     RedisDataThread* dataThread;
@@ -111,6 +113,9 @@ private:
     std::unique_ptr<Label> connectionInfoLabel;
     std::unique_ptr<Label> statusLabel;
     std::unique_ptr<Label> statusValueLabel;
+
+    // Configuration popup
+    RedisConfigurationPopup* currentConfigPopup;
 
     // Helper methods
     void createConnectionControls();

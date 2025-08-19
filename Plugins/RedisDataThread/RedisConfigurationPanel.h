@@ -69,6 +69,8 @@ public:
     /** Timer interface for status updates */
     void timerCallback() override;
 
+
+
     /** Update UI with current settings */
     void updateFromThread();
     
@@ -100,6 +102,7 @@ private:
     std::unique_ptr<Label> hostLabel;
     std::unique_ptr<TextEditor> hostEditor;
     std::unique_ptr<Label> hostTooltip;
+    std::unique_ptr<UtilityButton> hostInfoButton;
     
     std::unique_ptr<Label> portLabel;
     std::unique_ptr<TextEditor> portEditor;
@@ -161,6 +164,7 @@ private:
     void createAdvancedGroup();
     void createControlButtons();
     void setupTooltips();
+    void setupCustomTooltips();
     void validateField(TextEditor* editor, const String& fieldName);
     void updateValidationStatus();
     void updatePerformanceHints();
@@ -168,6 +172,8 @@ private:
     void clearFieldError(Component* field);
     String getFieldTooltip(const String& fieldName);
     void setupPresets();
+
+
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisConfigurationPanel);
 };

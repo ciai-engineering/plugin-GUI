@@ -25,11 +25,13 @@
 #include "RedisDataThread.h"
 #include "RedisDataDisplayPopup.h"
 #include "RedisConfigurationPanel.h"
+#include "RedisConfigurationPopup.h"
 #include <CoreServicesHeader.h>
 
 RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, RedisDataThread* thread)
     : GenericEditor(parentNode)
     , dataThread(thread)
+    , currentConfigPopup(nullptr)
 {
     desiredWidth = 250;
 
@@ -294,7 +296,9 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
 {
     if (button == configureButton.get())
     {
-        showEnhancedConfigurationDialog();
+        currentConfigPopup = new RedisConfigurationPopup(this, dataThread);
+        CoreServices::getPopupManager()->showPopup(std::unique_ptr<PopupComponent>(currentConfigPopup), button);
+        currentConfigPopup->addComponentListener(this);
     }
     else if (button == streamModeButton.get())
     {
@@ -561,27 +565,7 @@ void RedisDataThreadEditor::stopAcquisition()
     // Data button remains enabled
 }
 
-void RedisDataThreadEditor::showEnhancedConfigurationDialog()
-{
-    // Create enhanced configuration dialog
-    DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Redis Configuration";
-    options.dialogBackgroundColour = findColour(ThemeColours::widgetBackground);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.resizable = false;
 
-    // Create the configuration panel
-    auto configPanel = std::make_unique<RedisConfigurationPanel>(dataThread);
-    options.content.setOwned(configPanel.release());
-
-    // Show the dialog
-    auto* dialog = options.launchAsync();
-    if (dialog != nullptr)
-    {
-        dialog->centreWithSize(420, 650);
-    }
-}
 
 void RedisDataThreadEditor::showLatestData()
 {
@@ -601,6 +585,14 @@ void RedisDataThreadEditor::showLatestData()
 
     // Show popup using the PopupManager
     CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
+}
+
+void RedisDataThreadEditor::componentBeingDeleted(Component& component)
+{
+    if (&component == currentConfigPopup)
+    {
+        currentConfigPopup = nullptr;
+    }
 }
 
 
