@@ -89,6 +89,9 @@ public:
     /** Test connection with current settings */
     void testConnection();
 
+    /** Show latest data from Redis */
+    void showLatestData();
+
 private:
     RedisDataThread* dataThread;
     
@@ -151,6 +154,7 @@ private:
     std::unique_ptr<UtilityButton> resetButton;
     std::unique_ptr<UtilityButton> savePresetButton;
     std::unique_ptr<UtilityButton> helpButton;
+    std::unique_ptr<UtilityButton> dataButton;
 
     // Status indicators
     std::unique_ptr<Label> validationStatus;

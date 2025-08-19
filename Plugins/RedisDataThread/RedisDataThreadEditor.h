@@ -105,9 +105,7 @@ private:
 
     // Control buttons
     std::unique_ptr<UtilityButton> connectButton;
-    std::unique_ptr<UtilityButton> testButton;
     std::unique_ptr<UtilityButton> configureButton;
-    std::unique_ptr<UtilityButton> dataButton;
 
     // Status display
     std::unique_ptr<Label> connectionInfoLabel;
@@ -125,7 +123,6 @@ private:
     void applySettings();
     bool validateSettings();
     void showConfigurationDialog();
-    void showLatestData();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisDataThreadEditor);
 };

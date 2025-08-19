@@ -23,6 +23,7 @@
 
 #include "RedisConfigurationPanel.h"
 #include "RedisDataThread.h"
+#include "RedisDataDisplayPopup.h"
 #include <CoreServicesHeader.h>
 
 RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
@@ -113,6 +114,8 @@ void RedisConfigurationPanel::resized()
     // Control buttons row 2
     if (savePresetButton)
         savePresetButton->setBounds(margin, yPos, 100, 25);
+    if (dataButton)
+        dataButton->setBounds(margin + 110, yPos, 60, 25);
 
     yPos += 35;
 
@@ -325,6 +328,10 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     {
         showHelpDialog();
     }
+    else if (button == dataButton.get())
+    {
+        showLatestData();
+    }
     else if (button == openEphysFormatButton.get() || button == dataValidationButton.get())
     {
         applyToThread();
@@ -491,6 +498,11 @@ void RedisConfigurationPanel::createControlButtons()
     helpButton = std::make_unique<UtilityButton>("Help");
     helpButton->addListener(this);
     addAndMakeVisible(helpButton.get());
+
+    // Data button
+    dataButton = std::make_unique<UtilityButton>("Data");
+    dataButton->addListener(this);
+    addAndMakeVisible(dataButton.get());
 
     // Status indicators
     validationStatus = std::make_unique<Label>("Validation Status", "All settings valid");
@@ -1178,4 +1190,24 @@ void RedisConfigurationPanel::testConnection()
 
     // Re-enable test button
     testConnectionButton->setEnabled(true);
+}
+
+void RedisConfigurationPanel::showLatestData()
+{
+    if (!dataThread->isConnected())
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Not Connected",
+                                   "Please connect to Redis server first before retrieving data.");
+        return;
+    }
+
+    // Retrieve latest records from Redis
+    Array<String> records = dataThread->getLatestRecords(10);
+
+    // Create and show popup with the data
+    auto popup = std::make_unique<RedisDataDisplayPopup>(records, dataThread->getDataFormat());
+
+    // Show popup using the PopupManager
+    CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
 }

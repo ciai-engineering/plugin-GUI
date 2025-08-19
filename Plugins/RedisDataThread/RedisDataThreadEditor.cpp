@@ -190,12 +190,6 @@ void RedisDataThreadEditor::createStatusControls()
     connectButton->addListener(this);
     addAndMakeVisible(connectButton.get());
 
-    // Test button
-    testButton = std::make_unique<UtilityButton>("Test");
-    testButton->setBounds(xPos + 170, yPos, 50, buttonHeight);
-    testButton->addListener(this);
-    addAndMakeVisible(testButton.get());
-
     yPos += spacing;
 
     // Status label and value
@@ -210,14 +204,6 @@ void RedisDataThreadEditor::createStatusControls()
     statusValueLabel->setFont(FontOptions("Inter", "Regular", 12));
     statusValueLabel->setColour(Label::textColourId, Colours::red);
     addAndMakeVisible(statusValueLabel.get());
-
-    yPos += spacing;
-
-    // Data button
-    dataButton = std::make_unique<UtilityButton>("Data");
-    dataButton->setBounds(xPos, yPos, 60, buttonHeight);
-    dataButton->addListener(this);
-    addAndMakeVisible(dataButton.get());
 }
 
 void RedisDataThreadEditor::paint(Graphics& g)
@@ -250,8 +236,6 @@ void RedisDataThreadEditor::resized()
             configureButton->setBounds(xPos, yPos, 80, buttonHeight);
         if (connectButton)
             connectButton->setBounds(xPos + 90, yPos, 70, buttonHeight);
-        if (testButton)
-            testButton->setBounds(xPos + 170, yPos, 50, buttonHeight);
 
         yPos += spacing;
 
@@ -260,12 +244,6 @@ void RedisDataThreadEditor::resized()
             statusLabel->setBounds(xPos, yPos, 50, buttonHeight);
         if (statusValueLabel)
             statusValueLabel->setBounds(xPos + 55, yPos, 165, buttonHeight);
-
-        yPos += spacing;
-
-        // Data button
-        if (dataButton)
-            dataButton->setBounds(xPos, yPos, 60, buttonHeight);
     }
 }
 
@@ -336,36 +314,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
             connectButton->setLabel("Connect");
         }
     }
-    else if (button == testButton.get())
-    {
-        // Test connection without changing state
-        if (validateSettings())
-        {
-            String host = dataThread->getRedisHost();
-            int port = dataThread->getRedisPort();
-            String password = dataThread->getRedisPassword();
 
-            RedisDataThread tempThread(nullptr);
-            if (tempThread.connectToRedis(host, port, password))
-            {
-                AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                           "Connection Test",
-                                           "Successfully connected to Redis server!");
-                tempThread.disconnectFromRedis();
-            }
-            else
-            {
-                AlertWindow::showMessageBox(AlertWindow::WarningIcon,
-                                           "Connection Test",
-                                           "Failed to connect to Redis server.");
-            }
-        }
-    }
-    else if (button == dataButton.get())
-    {
-        // Show latest data from Redis
-        showLatestData();
-    }
 }
 
 void RedisDataThreadEditor::timerCallback()
@@ -552,8 +501,6 @@ void RedisDataThreadEditor::startAcquisition()
     // Disable editing during acquisition
     configureButton->setEnabled(false);
     connectButton->setEnabled(false);
-    testButton->setEnabled(false);
-    // Keep Data button enabled during acquisition
 }
 
 void RedisDataThreadEditor::stopAcquisition()
@@ -561,31 +508,11 @@ void RedisDataThreadEditor::stopAcquisition()
     // Re-enable editing after acquisition
     configureButton->setEnabled(true);
     connectButton->setEnabled(true);
-    testButton->setEnabled(true);
-    // Data button remains enabled
 }
 
 
 
-void RedisDataThreadEditor::showLatestData()
-{
-    if (!dataThread->isConnected())
-    {
-        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
-                                   "Not Connected",
-                                   "Please connect to Redis server first before retrieving data.");
-        return;
-    }
 
-    // Retrieve latest records from Redis
-    Array<String> records = dataThread->getLatestRecords(10);
-
-    // Create and show popup with the data
-    auto popup = std::make_unique<RedisDataDisplayPopup>(records, dataThread->getDataFormat());
-
-    // Show popup using the PopupManager
-    CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
-}
 
 void RedisDataThreadEditor::componentBeingDeleted(Component& component)
 {
