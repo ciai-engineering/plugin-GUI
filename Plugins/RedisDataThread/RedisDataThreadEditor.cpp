@@ -452,6 +452,19 @@ bool RedisDataThreadEditor::validateSettings()
         return false;
     }
 
+    // Validate buffer size
+    int bufferSize = dataThread->getBufferSize();
+    if (bufferSize < 100 || bufferSize > 100000)
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon, "Invalid Settings",
+                                   "Buffer size must be between 100 and 100000 samples.\n"
+                                   "Recommended values:\n"
+                                   "• Real-time applications: 500-2000\n"
+                                   "• Balanced performance: 3000-10000\n"
+                                   "• High throughput: 10000-50000");
+        return false;
+    }
+
     return true;
 }
 
@@ -468,6 +481,7 @@ void RedisDataThreadEditor::showConfigurationDialog()
     configDialog.addTextEditor("channel", dataThread->getRedisChannelName(), "Channel:");
     configDialog.addTextEditor("sampleRate", String(dataThread->getSampleRate()), "Sample Rate:");
     configDialog.addTextEditor("numChannels", String(dataThread->getNumDataChannels()), "Channels:");
+    configDialog.addTextEditor("bufferSize", String(dataThread->getBufferSize()), "Buffer Size:");
 
     configDialog.addComboBox("dataFormat", StringArray("JSON", "Binary", "BRANDBCI"), "Format:");
     int formatIndex = dataThread->getDataFormat() == "json" ? 0 :
@@ -499,6 +513,7 @@ void RedisDataThreadEditor::showConfigurationDialog()
         dataThread->setRedisChannel(configDialog.getTextEditorContents("channel"));
         dataThread->setSampleRate(configDialog.getTextEditorContents("sampleRate").getFloatValue());
         dataThread->setNumChannels(configDialog.getTextEditorContents("numChannels").getIntValue());
+        dataThread->setBufferSize(configDialog.getTextEditorContents("bufferSize").getIntValue());
 
         int selectedFormatIndex = configDialog.getComboBoxComponent("dataFormat")->getSelectedItemIndex();
         String selectedFormat = selectedFormatIndex == 0 ? "json" :

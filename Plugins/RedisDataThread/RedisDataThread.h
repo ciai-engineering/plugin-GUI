@@ -95,6 +95,7 @@ public:
     void setSampleRate(float sampleRate);
     void setNumChannels(int numChannels);
     void setDataFormat(const String& format);
+    void setBufferSize(int size);
 
     /** Stream support methods */
     void setStreamMode(bool useStreams);
@@ -110,10 +111,12 @@ public:
     String getDataFormat() const { return dataFormat; }
     String getConnectionStatus() const;
     bool isAutoDetectChannelsEnabled() const { return autoDetectChannels; }
+    int getBufferSize() const { return bufferSize; }
 
     /** Configuration validation */
     bool validateConfiguration() const;
     bool validateChannelConfiguration(int channels) const;
+    bool validateBufferSize(int size) const;
 
     /** Stream getters */
     bool getStreamMode() const { return useStreamMode; }
@@ -137,6 +140,7 @@ private:
     int maxDataChannels;      // Maximum supported channels
     String dataFormat;        // "json", "binary", "brandbci"
     bool autoDetectChannels;  // Auto-detect channel count from data
+    int bufferSize;           // Configurable buffer size in samples
 
     // Stream configuration
     bool useStreamMode;

@@ -35,6 +35,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , maxDataChannels(1024)        // Set maximum limit
     , dataFormat("brandbci")
     , autoDetectChannels(true)     // Enable auto-detection by default
+    , bufferSize(10000)            // Default buffer size: 10000 samples
     , useStreamMode(true)
     , currentStreamId("$")  // Start from latest data, not from beginning
     , isAcquiring(false)
@@ -337,6 +338,22 @@ void RedisDataThread::setDataFormat(const String& format)
             useStreamMode = true;
             LOGD("Auto-enabled stream mode for BRANDBCI format");
         }
+    }
+}
+
+void RedisDataThread::setBufferSize(int size)
+{
+    if (validateBufferSize(size) && bufferSize != size)
+    {
+        bufferSize = size;
+        LOGD("Buffer size changed to: ", size, " samples");
+
+        // Resize buffers to match new buffer size
+        resizeBuffers();
+    }
+    else if (!validateBufferSize(size))
+    {
+        LOGE("Invalid buffer size: ", size, ". Must be between 100 and 100000 samples.");
     }
 }
 
@@ -649,13 +666,17 @@ void RedisDataThread::resizeBuffers()
     sourceBuffers.clear();
 
     // Create one DataBuffer for our single data stream
-    // Buffer size: 10000 samples should be sufficient for Redis data
-    const int bufferSize = 10000;
-
+    // Use configurable buffer size
     DataBuffer* buffer = new DataBuffer(numDataChannels, bufferSize);
     sourceBuffers.add(buffer);
 
     LOGD("Redis DataThread buffers resized: ", numDataChannels, " channels, buffer size: ", bufferSize);
+
+    // Calculate and log latency information
+    if (sampleRate > 0) {
+        float latencyMs = (bufferSize / sampleRate) * 1000.0f;
+        LOGD("Buffer latency: ", latencyMs, " ms at ", sampleRate, " Hz sample rate");
+    }
 }
 
 bool RedisDataThread::updateBuffer()
@@ -1906,6 +1927,11 @@ bool RedisDataThread::validateConfiguration() const
         return false;
     }
 
+    // Validate buffer size
+    if (!validateBufferSize(bufferSize)) {
+        return false;
+    }
+
     // Validate stream name (use channel name as stream name in stream mode)
     if (useStreamMode && redisChannelName.isEmpty()) {
         LOGE("Configuration validation failed: Channel name cannot be empty in stream mode");
@@ -1938,6 +1964,38 @@ bool RedisDataThread::validateChannelConfiguration(int channels) const
     // Check for reasonable channel counts based on common hardware
     if (channels > 512) {
         LOGD("Warning: Large number of channels (", channels, ") - ensure this is correct");
+    }
+
+    return true;
+}
+
+bool RedisDataThread::validateBufferSize(int size) const
+{
+    // Minimum buffer size: 100 samples (for very low latency applications)
+    const int MIN_BUFFER_SIZE = 100;
+    // Maximum buffer size: 100000 samples (for high throughput applications)
+    const int MAX_BUFFER_SIZE = 100000;
+
+    if (size < MIN_BUFFER_SIZE) {
+        LOGE("Buffer size validation failed: Size (", size,
+             ") is too small. Minimum is ", MIN_BUFFER_SIZE, " samples.");
+        return false;
+    }
+
+    if (size > MAX_BUFFER_SIZE) {
+        LOGE("Buffer size validation failed: Size (", size,
+             ") is too large. Maximum is ", MAX_BUFFER_SIZE, " samples.");
+        return false;
+    }
+
+    // Warn for very small buffer sizes that might cause performance issues
+    if (size < 500) {
+        LOGD("Warning: Small buffer size (", size, " samples) may cause high CPU usage");
+    }
+
+    // Warn for very large buffer sizes that might cause high latency
+    if (size > 50000) {
+        LOGD("Warning: Large buffer size (", size, " samples) will cause high latency");
     }
 
     return true;
