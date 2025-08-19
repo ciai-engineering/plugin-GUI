@@ -24,6 +24,7 @@
 #include "RedisDataThreadEditor.h"
 #include "RedisDataThread.h"
 #include "RedisDataDisplayPopup.h"
+#include "RedisConfigurationPanel.h"
 #include <CoreServicesHeader.h>
 
 RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, RedisDataThread* thread)
@@ -293,7 +294,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
 {
     if (button == configureButton.get())
     {
-        showConfigurationDialog();
+        showEnhancedConfigurationDialog();
     }
     else if (button == streamModeButton.get())
     {
@@ -558,6 +559,28 @@ void RedisDataThreadEditor::stopAcquisition()
     connectButton->setEnabled(true);
     testButton->setEnabled(true);
     // Data button remains enabled
+}
+
+void RedisDataThreadEditor::showEnhancedConfigurationDialog()
+{
+    // Create enhanced configuration dialog
+    DialogWindow::LaunchOptions options;
+    options.dialogTitle = "Redis Configuration";
+    options.dialogBackgroundColour = findColour(ThemeColours::widgetBackground);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = false;
+    options.resizable = false;
+
+    // Create the configuration panel
+    auto configPanel = std::make_unique<RedisConfigurationPanel>(dataThread);
+    options.content.setOwned(configPanel.release());
+
+    // Show the dialog
+    auto* dialog = options.launchAsync();
+    if (dialog != nullptr)
+    {
+        dialog->centreWithSize(420, 650);
+    }
 }
 
 void RedisDataThreadEditor::showLatestData()

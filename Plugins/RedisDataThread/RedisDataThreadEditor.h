@@ -27,6 +27,7 @@
 #include <EditorHeaders.h>
 
 class RedisDataThread;
+class RedisConfigurationPanel;
 
 /**
  * Custom editor for the RedisDataThread
@@ -71,6 +72,9 @@ public:
     /** Called when acquisition starts/stops */
     void startAcquisition() override;
     void stopAcquisition() override;
+
+    /** Show enhanced configuration dialog */
+    void showEnhancedConfigurationDialog();
 
 private:
     RedisDataThread* dataThread;
