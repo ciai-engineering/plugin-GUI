@@ -36,7 +36,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , dataFormat("brandbci")
     , autoDetectChannels(true)     // Enable auto-detection by default
     , useStreamMode(true)
-    , currentStreamId("0-0")
+    , currentStreamId("$")  // Start from latest data, not from beginning
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
@@ -363,6 +363,14 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
         return records;
     }
 
+    // Limit the number of records to prevent memory issues
+    const int maxSafeRecords = 100;
+    if (numRecords > maxSafeRecords)
+    {
+        LOGD("Requested ", numRecords, " records, limiting to ", maxSafeRecords, " for memory safety");
+        numRecords = maxSafeRecords;
+    }
+
     LOGD("Retrieving latest ", numRecords, " records from Redis channel: ", redisChannelName, " (mode: ", useStreamMode ? "STREAM" : "LIST", ")");
 
     redisReply* reply = nullptr;
@@ -487,9 +495,10 @@ bool RedisDataThread::startAcquisition()
         return true;
     }
 
-    // Reset sample counter
+    // Reset sample counter and stream position
     currentSampleNumber = 0;
-    LOGD("Reset sample counter to 0");
+    currentStreamId = "$";  // Start from latest data to avoid processing historical backlog
+    LOGD("Reset sample counter to 0 and stream position to latest ($)");
 
     // Test Redis connection before starting
     LOGD("Testing Redis connection before starting acquisition...");
@@ -1367,6 +1376,8 @@ bool RedisDataThread::processOpenEphysData(const OpenEphysStreamData& data)
 {
     LOGD("Processing Open Ephys data: ", data.n_samples, " samples, ",
          data.n_channels, " channels, type: ", data.data_dtype);
+
+    // Note: Sample rate is set during initialization and should match Redis data
 
     // 1. Validate data if enabled
     if (enableDataValidation && !validateStreamData(data))
