@@ -24,6 +24,8 @@
 #include "RedisConfigurationPanel.h"
 #include "RedisDataThread.h"
 #include "RedisDataDisplayPopup.h"
+#include "RedisConnectionTestPopup.h"
+#include "RedisHelpPopup.h"
 #include <CoreServicesHeader.h>
 
 RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
@@ -1055,53 +1057,11 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
 
 void RedisConfigurationPanel::showHelpDialog()
 {
-    String helpText =
-        "Redis Configuration Help\n\n"
+    // Create and show help popup
+    auto popup = std::make_unique<RedisHelpPopup>();
 
-        "CONNECTION SETTINGS:\n"
-        "  * Host: Redis server address (localhost for local server)\n"
-        "  * Port: Redis server port (default: 6379)\n"
-        "  * Password: Authentication password (optional)\n\n"
-
-        "STREAM SETTINGS:\n"
-        "  * Channel: Redis channel/stream name for data\n"
-        "  * Stream Mode: Enable for Redis Streams (XREAD), disable for Lists (BLPOP)\n"
-        "  * Always Latest: Always read newest data (enable for monitoring, disable for recording)\n\n"
-
-        "DATA FORMAT:\n"
-        "  * Sample Rate: Expected sampling frequency in Hz\n"
-        "  * Channels: Number of data channels per sample\n"
-        "  * Format: Data encoding format\n"
-        "    - BRANDBCI: Native BRANDBCI format (recommended)\n"
-        "    - JSON: Human-readable, flexible\n"
-        "    - Binary: Highest performance\n\n"
-
-        "ADVANCED SETTINGS:\n"
-        "  * Buffer Size: Internal buffer size (100-100000 samples)\n"
-        "  * OpenEphys Format: Enable native Open Ephys integration\n"
-        "  * Data Validation: Enable real-time data checking\n\n"
-
-        "PRESETS:\n"
-        "  * Default (32ch, 30kHz): Standard neural recording configuration\n"
-        "  * High Density (96ch, 30kHz): High-channel count neural recording\n"
-        "  * Low Frequency (32ch, 1kHz): LFP and slow signal recording\n"
-        "  * Testing (8ch, 1kHz): Development and testing configuration\n\n"
-
-        "PERFORMANCE TIPS:\n"
-        "  * Use Binary format for highest performance\n"
-        "  * Enable Stream Mode for real-time applications\n"
-        "  * Adjust buffer size based on latency requirements\n"
-        "  * Disable Data Validation for maximum speed\n\n"
-
-        "TROUBLESHOOTING:\n"
-        "  * Red fields indicate validation errors\n"
-        "  * Use Test button to verify connection\n"
-        "  * Check Redis server is running and accessible\n"
-        "  * Verify network connectivity and firewall settings";
-
-    AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                               "Redis Configuration Help",
-                               helpText);
+    // Show popup using the PopupManager
+    CoreServices::getPopupManager()->showPopup(std::move(popup), helpButton.get());
 }
 
 void RedisConfigurationPanel::testConnection()
@@ -1163,23 +1123,24 @@ void RedisConfigurationPanel::testConnection()
     {
         connectionStatus->setText("🟢 Connection successful!", dontSendNotification);
         connectionStatus->setColour(Label::textColourId, Colours::green);
-
-        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                   "Connection Test",
-                                   "✓ Successfully connected to Redis server!\n\n"
-                                   "Host: " + hostEditor->getText() + "\n"
-                                   "Port: " + portEditor->getText() + "\n"
-                                   "Channel: " + channelEditor->getText());
     }
     else
     {
         connectionStatus->setText("🔴 Connection failed", dontSendNotification);
         connectionStatus->setColour(Label::textColourId, Colours::red);
-
-        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
-                                   "Connection Test Failed",
-                                   errorMessage);
     }
+
+    // Create and show popup with the test result
+    auto popup = std::make_unique<RedisConnectionTestPopup>(
+        connectionSuccess,
+        hostEditor->getText(),
+        portEditor->getText(),
+        channelEditor->getText(),
+        errorMessage
+    );
+
+    // Show popup using the PopupManager
+    CoreServices::getPopupManager()->showPopup(std::move(popup), testConnectionButton.get());
 
     // Re-enable test button
     testConnectionButton->setEnabled(true);
