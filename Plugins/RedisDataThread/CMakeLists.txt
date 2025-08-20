@@ -28,6 +28,8 @@ endif()
 add_sources(${PLUGIN_NAME} RedisDataThread.cpp RedisDataThread.h
             RedisDataThreadEditor.cpp RedisDataThreadEditor.h
             RedisDataDisplayPopup.cpp RedisDataDisplayPopup.h
+            RedisConnectionTestPopup.cpp RedisConnectionTestPopup.h
+            RedisHelpPopup.cpp RedisHelpPopup.h
             RedisConfigurationPanel.cpp RedisConfigurationPanel.h
             RedisConfigurationPopup.cpp RedisConfigurationPopup.h
             CustomTooltipComponent.cpp CustomTooltipComponent.h)
