@@ -83,6 +83,9 @@ public:
     /** Load preset configuration */
     void loadPreset(const String& presetName);
 
+    /** Save current configuration as preset */
+    void savePreset(const String& presetName);
+
     /** Show help dialog */
     void showHelpDialog();
 
@@ -123,6 +126,10 @@ private:
     std::unique_ptr<Label> streamModeLabel;
     std::unique_ptr<ToggleButton> streamModeButton;
     std::unique_ptr<Label> streamModeTooltip;
+
+    std::unique_ptr<Label> alwaysLatestLabel;
+    std::unique_ptr<ToggleButton> alwaysLatestButton;
+    std::unique_ptr<Label> alwaysLatestTooltip;
     
     // Format settings
     std::unique_ptr<Label> sampleRateLabel;

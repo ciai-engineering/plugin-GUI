@@ -38,6 +38,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , bufferSize(10000)            // Default buffer size: 10000 samples
     , useStreamMode(true)
     , currentStreamId("$")  // Start from latest data, not from beginning
+    , alwaysReadLatest(false)  // Sequential reading by default (no data loss)
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
@@ -869,27 +870,39 @@ bool RedisDataThread::updateBufferFromStream()
         return false;
     }
 
-    LOGD("Reading from stream: ", redisChannelName, " with ID: ", currentStreamId);
+    redisReply* reply = nullptr;
 
-    // Use XREAD to read from single stream
-    redisReply* reply = (redisReply*)redisCommand(redisCtx,
-        "XREAD BLOCK 1000 STREAMS %s %s",
-        redisChannelName.toRawUTF8(),
-        currentStreamId.toRawUTF8());
+    if (alwaysReadLatest)
+    {
+        // For always-read-latest mode, use XREAD with $ to wait for new data
+        LOGD("Waiting for new data from stream: ", redisChannelName, " (mode: LATEST, waiting for new data)");
+        reply = (redisReply*)redisCommand(redisCtx,
+            "XREAD BLOCK 1000 STREAMS %s $",
+            redisChannelName.toRawUTF8());
+    }
+    else
+    {
+        // For sequential mode, use XREAD with the last known ID
+        LOGD("Reading from stream: ", redisChannelName, " with ID: ", currentStreamId, " (mode: SEQUENTIAL)");
+        reply = (redisReply*)redisCommand(redisCtx,
+            "XREAD BLOCK 1000 STREAMS %s %s",
+            redisChannelName.toRawUTF8(),
+            currentStreamId.toRawUTF8());
+    }
 
     if (reply == nullptr)
     {
-        LOGE("XREAD command returned null reply");
-        handleRedisError("XREAD command failed");
+        LOGE("Redis command returned null reply");
+        handleRedisError("Redis command failed");
         return false;
     }
 
-    LOGD("XREAD reply type: ", reply->type, ", elements: ", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
+    LOGD("Redis reply type: ", reply->type, ", elements: ", (reply->type == REDIS_REPLY_ARRAY ? reply->elements : 0));
 
     if (reply->type == REDIS_REPLY_NIL)
     {
         // Timeout, no data available
-        LOGD("XREAD timeout - no data available in stream");
+        LOGD("Redis timeout - no data available in stream");
         freeReplyObject(reply);
         return true; // Not an error
     }
@@ -897,6 +910,7 @@ bool RedisDataThread::updateBufferFromStream()
     bool success = false;
     if (reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
     {
+        // Both modes now use XREAD, so use the same processing logic
         LOGD("XREAD returned array with ", reply->elements, " stream(s) - processing data");
 
         // Process the stream data
@@ -915,8 +929,16 @@ bool RedisDataThread::updateBufferFromStream()
                 redisReply* entryReply = entriesReply->element[entryIdx];
                 if (entryReply->type == REDIS_REPLY_ARRAY && entryReply->elements >= 2)
                 {
-                    // Update stream position
-                    currentStreamId = String(entryReply->element[0]->str);
+                    // Update stream position only if not in always-read-latest mode
+                    if (!alwaysReadLatest)
+                    {
+                        currentStreamId = String(entryReply->element[0]->str);
+                        LOGD("Updated stream position to: ", currentStreamId);
+                    }
+                    else
+                    {
+                        LOGD("Processing new data in always-latest mode (not updating position)");
+                    }
 
                     // Get field-value pairs
                     redisReply* fieldsReply = entryReply->element[1];
@@ -1277,6 +1299,14 @@ bool RedisDataThread::attemptReconnection()
 
     if (connectToRedis(redisHost, redisPort, redisPassword))
     {
+        // Reset stream position to latest data after reconnection
+        // This ensures we don't process stale data that accumulated during disconnection
+        if (useStreamMode)
+        {
+            currentStreamId = "$";
+            LOGD("Reset stream position to latest ($) after reconnection");
+        }
+
         LOGD("Redis reconnection successful");
         return true;
     }
@@ -1300,6 +1330,22 @@ void RedisDataThread::setStreamMode(bool useStreams)
             // Auto-switch to brandbci format for better stream support
             dataFormat = "brandbci";
             LOGD("Auto-switched data format to 'brandbci' for stream mode");
+        }
+    }
+}
+
+void RedisDataThread::setAlwaysReadLatest(bool alwaysLatest)
+{
+    if (alwaysReadLatest != alwaysLatest)
+    {
+        alwaysReadLatest = alwaysLatest;
+        LOGD("Always read latest mode changed to: ", alwaysLatest ? "ENABLED" : "DISABLED");
+
+        // Reset stream position when switching modes
+        if (alwaysLatest)
+        {
+            currentStreamId = "$";
+            LOGD("Reset stream position to latest ($) for always-read-latest mode");
         }
     }
 }
@@ -1999,6 +2045,72 @@ bool RedisDataThread::validateBufferSize(int size) const
     }
 
     return true;
+}
+
+void RedisDataThread::saveConfigurationToXml(XmlElement* parentElement)
+{
+    XmlElement* mainNode = parentElement->createNewChildElement("REDIS_DATA_THREAD");
+
+    // Save connection settings
+    mainNode->setAttribute("redisHost", redisHost);
+    mainNode->setAttribute("redisPort", redisPort);
+    mainNode->setAttribute("redisPassword", redisPassword);
+
+    // Save stream settings
+    mainNode->setAttribute("redisChannelName", redisChannelName);
+    mainNode->setAttribute("useStreamMode", useStreamMode);
+
+    // Save format settings
+    mainNode->setAttribute("dataFormat", dataFormat);
+    mainNode->setAttribute("sampleRate", sampleRate);
+    mainNode->setAttribute("numDataChannels", numDataChannels);
+
+    // Save advanced settings
+    mainNode->setAttribute("bufferSize", bufferSize);
+    mainNode->setAttribute("enableOpenEphysFormat", enableOpenEphysFormat);
+    mainNode->setAttribute("enableDataValidation", enableDataValidation);
+
+    LOGD("Redis configuration saved to XML");
+}
+
+void RedisDataThread::loadConfigurationFromXml(XmlElement* customParamsXml)
+{
+    if (customParamsXml == nullptr) return;
+
+    // Find the Redis data thread node
+    XmlElement* mainNode = customParamsXml->getChildByName("REDIS_DATA_THREAD");
+    if (mainNode == nullptr) return;
+
+    // Load connection settings
+    redisHost = mainNode->getStringAttribute("redisHost", "localhost");
+    redisPort = mainNode->getIntAttribute("redisPort", 6379);
+    redisPassword = mainNode->getStringAttribute("redisPassword", "");
+
+    // Load stream settings
+    redisChannelName = mainNode->getStringAttribute("redisChannelName", "neural_data_primary");
+    useStreamMode = mainNode->getBoolAttribute("useStreamMode", true);
+
+    // Load format settings
+    dataFormat = mainNode->getStringAttribute("dataFormat", "brandbci");
+    sampleRate = mainNode->getDoubleAttribute("sampleRate", 30000.0f);
+    numDataChannels = mainNode->getIntAttribute("numDataChannels", 32);
+
+    // Load advanced settings
+    bufferSize = mainNode->getIntAttribute("bufferSize", 10000);
+    enableOpenEphysFormat = mainNode->getBoolAttribute("enableOpenEphysFormat", true);
+    enableDataValidation = mainNode->getBoolAttribute("enableDataValidation", true);
+
+    // Validate loaded configuration
+    if (!validateConfiguration()) {
+        LOGD("Loaded configuration validation failed - using safe defaults");
+    }
+
+    LOGD("Redis configuration loaded from XML:");
+    LOGD("  - Host: ", redisHost, ":", redisPort);
+    LOGD("  - Channel: ", redisChannelName);
+    LOGD("  - Format: ", dataFormat);
+    LOGD("  - Channels: ", numDataChannels);
+    LOGD("  - Sample Rate: ", sampleRate);
 }
 
 

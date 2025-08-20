@@ -79,6 +79,12 @@ public:
     /** Called when the chain updates, to resize the sourceBuffers */
     void resizeBuffers() override;
 
+    /** Save configuration to XML element */
+    void saveConfigurationToXml(XmlElement* parentElement);
+
+    /** Load configuration from XML element */
+    void loadConfigurationFromXml(XmlElement* customParamsXml);
+
     /** Redis connection management */
     bool connectToRedis(const String& host, int port, const String& password = "");
     void disconnectFromRedis();
@@ -99,6 +105,7 @@ public:
 
     /** Stream support methods */
     void setStreamMode(bool useStreams);
+    void setAlwaysReadLatest(bool alwaysLatest);
 
     /** Configuration getters */
     String getRedisHost() const { return redisHost; }
@@ -112,14 +119,13 @@ public:
     String getConnectionStatus() const;
     bool isAutoDetectChannelsEnabled() const { return autoDetectChannels; }
     int getBufferSize() const { return bufferSize; }
+    bool getStreamMode() const { return useStreamMode; }
+    bool getAlwaysReadLatest() const { return alwaysReadLatest; }
 
     /** Configuration validation */
     bool validateConfiguration() const;
     bool validateChannelConfiguration(int channels) const;
     bool validateBufferSize(int size) const;
-
-    /** Stream getters */
-    bool getStreamMode() const { return useStreamMode; }
 
 private:
 #ifdef REDIS_ENABLED
@@ -145,6 +151,7 @@ private:
     // Stream configuration
     bool useStreamMode;
     String currentStreamId;        // Last read stream ID for XREAD
+    bool alwaysReadLatest;         // If true, always read from latest data ($) instead of sequential
 
     // State management
     std::atomic<bool> isAcquiring;

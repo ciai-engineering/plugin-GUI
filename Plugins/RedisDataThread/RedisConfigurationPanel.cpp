@@ -44,8 +44,8 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Start timer for status updates
     startTimer(2000); // Update every 2 seconds
 
-    // Set initial size - increased height to accommodate buttons in groups
-    setSize(420, 680);
+    // Set initial size - optimized height for better spacing
+    setSize(420, 660);
 }
 
 RedisConfigurationPanel::~RedisConfigurationPanel()
@@ -57,10 +57,10 @@ void RedisConfigurationPanel::paint(Graphics& g)
 {
     // Background
     g.fillAll(findColour(ThemeColours::widgetBackground));
-    
-    // Title
+
+    // Title - using consistent font size with other components
     g.setColour(findColour(ThemeColours::defaultText));
-    g.setFont(FontOptions("Inter", "Bold", 16));
+    g.setFont(FontOptions("Inter", "Bold", 18));
     g.drawText("Redis Configuration", 10, 5, getWidth() - 20, 25, Justification::centred);
 }
 
@@ -68,7 +68,7 @@ void RedisConfigurationPanel::resized()
 {
     int yPos = 35;
     int connectionGroupHeight = 150; // Increased to accommodate Test button
-    int streamGroupHeight = 150;     // Increased to accommodate Data button
+    int streamGroupHeight = 130;     // Reduced height to minimize bottom spacing
     int formatGroupHeight = 120;     // Keep original height
     int advancedGroupHeight = 120;   // Keep original height
     int margin = 10;
@@ -202,9 +202,10 @@ void RedisConfigurationPanel::createConnectionGroup()
 
     yOffset += rowHeight + 5; // Add some extra spacing
 
-    // Test connection button
+    // Test connection button - increased width to show full text
     testConnectionButton = std::make_unique<UtilityButton>("Test Connection");
-    testConnectionButton->setBounds(15, yOffset, 120, 25);
+    testConnectionButton->setBounds(15, yOffset, 140, 25);
+    testConnectionButton->setFont(FontOptions("Inter", "Regular", 12)); // Consistent font
     testConnectionButton->addListener(this);
     connectionGroup->addAndMakeVisible(testConnectionButton.get());
 }
@@ -257,11 +258,31 @@ void RedisConfigurationPanel::createStreamGroup()
     streamModeTooltip->setColour(Label::textColourId, Colours::grey);
     streamGroup->addAndMakeVisible(streamModeTooltip.get());
 
-    yOffset += rowHeight + 5; // Add some extra spacing
+    yOffset += rowHeight;
 
-    // Data button
+    // Always Read Latest Mode
+    alwaysLatestLabel = std::make_unique<Label>("Always Latest Label", "Always Latest:");
+    alwaysLatestLabel->setBounds(15, yOffset, labelWidth, 20);
+    alwaysLatestLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(alwaysLatestLabel.get());
+
+    alwaysLatestButton = std::make_unique<ToggleButton>("Always Latest");
+    alwaysLatestButton->setBounds(100, yOffset, 20, 20);
+    alwaysLatestButton->addListener(this);
+    streamGroup->addAndMakeVisible(alwaysLatestButton.get());
+
+    alwaysLatestTooltip = std::make_unique<Label>("Always Latest Tooltip", "Always read newest data");
+    alwaysLatestTooltip->setBounds(130, yOffset, 160, 20);
+    alwaysLatestTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    alwaysLatestTooltip->setColour(Label::textColourId, Colours::grey);
+    streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
+
+    yOffset += rowHeight + 2; // Reduced spacing to minimize bottom gap
+
+    // Data button - reduced width as text is shorter
     dataButton = std::make_unique<UtilityButton>("View Data");
-    dataButton->setBounds(15, yOffset, 100, 25);
+    dataButton->setBounds(15, yOffset, 90, 25);
+    dataButton->setFont(FontOptions("Inter", "Regular", 12)); // Consistent font
     dataButton->addListener(this);
     streamGroup->addAndMakeVisible(dataButton.get());
 }
@@ -319,6 +340,10 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     {
         applyToThread();
     }
+    else if (button == alwaysLatestButton.get())
+    {
+        applyToThread();
+    }
     else if (button == testConnectionButton.get())
     {
         testConnection();
@@ -330,10 +355,23 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     }
     else if (button == savePresetButton.get())
     {
-        // TODO: Implement save preset functionality
-        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                   "Save Preset",
-                                   "Preset saving functionality will be implemented in a future version.");
+        // Show dialog to get preset name
+        AlertWindow alertWindow("Save Preset", "Enter a name for this preset:", AlertWindow::QuestionIcon);
+        alertWindow.addTextEditor("presetName", "My Preset", "Preset name:");
+        alertWindow.addButton("Save", 1, KeyPress(KeyPress::returnKey));
+        alertWindow.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
+
+        if (alertWindow.runModalLoop() == 1)
+        {
+            String presetName = alertWindow.getTextEditorContents("presetName").trim();
+            if (presetName.isNotEmpty())
+            {
+                savePreset(presetName);
+                AlertWindow::showMessageBox(AlertWindow::InfoIcon,
+                                           "Preset Saved",
+                                           "Preset '" + presetName + "' has been saved successfully.");
+            }
+        }
     }
     else if (button == helpButton.get())
     {
@@ -575,6 +613,17 @@ void RedisConfigurationPanel::setupCustomTooltips()
                                 "* BRANDBCI compatibility\n\n"
                                 "Tip: Enable for modern applications");
 
+    alwaysLatestButton->setTooltip("Always Read Latest Data\n\n"
+                                  "Control stream reading behavior.\n\n"
+                                  "When enabled:\n"
+                                  "* Always reads newest data (uses '$')\n"
+                                  "* May skip data during processing gaps\n"
+                                  "* Best for real-time monitoring\n\n"
+                                  "When disabled:\n"
+                                  "* Sequential reading (no data loss)\n"
+                                  "* Processes all data in order\n\n"
+                                  "Tip: Enable for live monitoring, disable for data recording");
+
     sampleRateEditor->setTooltip("Sampling Rate (Hz)\n\n"
                                 "Expected data sampling frequency.\n\n"
                                 "Typical rates:\n"
@@ -630,14 +679,27 @@ void RedisConfigurationPanel::setupCustomTooltips()
 void RedisConfigurationPanel::setupPresets()
 {
     presetCombo->addItem("Select Preset...", 1);
-    presetCombo->addItem("Default", 2);
-    presetCombo->addItem("BRANDBCI Standard", 3);
-    presetCombo->addItem("Local Testing", 4);
-    presetCombo->addItem("High Performance", 5);
-    presetCombo->addItem("Utah Array 96ch", 6);
-    presetCombo->addItem("Neuropixels", 7);
-    presetCombo->addItem("LFP Recording", 8);
-    presetCombo->addItem("Behavioral Data", 9);
+    presetCombo->addItem("Default (32ch, 30kHz)", 2);
+    presetCombo->addItem("High Density (96ch, 30kHz)", 3);
+    presetCombo->addItem("Low Frequency (32ch, 1kHz)", 4);
+    presetCombo->addItem("Testing (8ch, 1kHz)", 5);
+
+    // Load custom presets from files
+    File appDataDir = File::getSpecialLocation(File::userApplicationDataDirectory);
+    File presetsDir = appDataDir.getChildFile("Open Ephys").getChildFile("RedisDataThread").getChildFile("Presets");
+
+    if (presetsDir.exists())
+    {
+        Array<File> presetFiles;
+        presetsDir.findChildFiles(presetFiles, File::findFiles, false, "*.xml");
+
+        for (const File& file : presetFiles)
+        {
+            String presetName = file.getFileNameWithoutExtension();
+            presetCombo->addItem(presetName, presetCombo->getNumItems() + 1);
+        }
+    }
+
     presetCombo->setSelectedItemIndex(0);
 }
 
@@ -653,6 +715,7 @@ void RedisConfigurationPanel::updateFromThread()
     // Update stream settings
     channelEditor->setText(dataThread->getRedisChannelName(), false);
     streamModeButton->setToggleState(dataThread->getStreamMode(), dontSendNotification);
+    alwaysLatestButton->setToggleState(dataThread->getAlwaysReadLatest(), dontSendNotification);
 
     // Update format settings
     sampleRateEditor->setText(String(dataThread->getSampleRate()), false);
@@ -683,6 +746,7 @@ void RedisConfigurationPanel::applyToThread()
     // Apply stream settings
     dataThread->setRedisChannel(channelEditor->getText());
     dataThread->setStreamMode(streamModeButton->getToggleState());
+    dataThread->setAlwaysReadLatest(alwaysLatestButton->getToggleState());
 
     // Apply format settings
     dataThread->setSampleRate(sampleRateEditor->getText().getFloatValue());
@@ -940,69 +1004,29 @@ void RedisConfigurationPanel::clearFieldError(Component* field)
 
 void RedisConfigurationPanel::loadPreset(const String& presetName)
 {
-    if (presetName == "Default")
+    if (presetName == "Default (32ch, 30kHz)")
     {
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("openephys_data");
-        streamModeButton->setToggleState(false, dontSendNotification);
+        channelEditor->setText("neural_data");
+        streamModeButton->setToggleState(true, dontSendNotification);
+        alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for complete data recording
         sampleRateEditor->setText("30000");
         numChannelsEditor->setText("32");
-        dataFormatCombo->setSelectedItemIndex(1); // JSON
-        bufferSizeEditor->setText("1000");
-        openEphysFormatButton->setToggleState(false, dontSendNotification);
-        dataValidationButton->setToggleState(true, dontSendNotification);
-    }
-    else if (presetName == "BRANDBCI Standard")
-    {
-        hostEditor->setText("localhost");
-        portEditor->setText("6379");
-        passwordEditor->setText("");
-        channelEditor->setText("neural_data");
-        streamModeButton->setToggleState(true, dontSendNotification);
-        sampleRateEditor->setText("30000");
-        numChannelsEditor->setText("96");
         dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
-        bufferSizeEditor->setText("2000");
-        openEphysFormatButton->setToggleState(true, dontSendNotification);
-        dataValidationButton->setToggleState(true, dontSendNotification);
-    }
-    else if (presetName == "Local Testing")
-    {
-        hostEditor->setText("127.0.0.1");
-        portEditor->setText("6379");
-        passwordEditor->setText("");
-        channelEditor->setText("test_data");
-        streamModeButton->setToggleState(false, dontSendNotification);
-        sampleRateEditor->setText("1000");
-        numChannelsEditor->setText("8");
-        dataFormatCombo->setSelectedItemIndex(1); // JSON
-        bufferSizeEditor->setText("500");
-        openEphysFormatButton->setToggleState(false, dontSendNotification);
-        dataValidationButton->setToggleState(true, dontSendNotification);
-    }
-    else if (presetName == "High Performance")
-    {
-        hostEditor->setText("localhost");
-        portEditor->setText("6379");
-        passwordEditor->setText("");
-        channelEditor->setText("neural_data");
-        streamModeButton->setToggleState(true, dontSendNotification);
-        sampleRateEditor->setText("30000");
-        numChannelsEditor->setText("128");
-        dataFormatCombo->setSelectedItemIndex(2); // Binary
         bufferSizeEditor->setText("5000");
         openEphysFormatButton->setToggleState(true, dontSendNotification);
-        dataValidationButton->setToggleState(false, dontSendNotification);
+        dataValidationButton->setToggleState(true, dontSendNotification);
     }
-    else if (presetName == "Utah Array 96ch")
+    else if (presetName == "High Density (96ch, 30kHz)")
     {
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("utah_array_data");
+        channelEditor->setText("neural_data_hd");
         streamModeButton->setToggleState(true, dontSendNotification);
+        alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for complete data recording
         sampleRateEditor->setText("30000");
         numChannelsEditor->setText("96");
         dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
@@ -1010,47 +1034,82 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
     }
-    else if (presetName == "Neuropixels")
-    {
-        hostEditor->setText("localhost");
-        portEditor->setText("6379");
-        passwordEditor->setText("");
-        channelEditor->setText("neuropixels_data");
-        streamModeButton->setToggleState(true, dontSendNotification);
-        sampleRateEditor->setText("30000");
-        numChannelsEditor->setText("384");
-        dataFormatCombo->setSelectedItemIndex(2); // Binary for high channel count
-        bufferSizeEditor->setText("10000");
-        openEphysFormatButton->setToggleState(true, dontSendNotification);
-        dataValidationButton->setToggleState(false, dontSendNotification); // Disable for performance
-    }
-    else if (presetName == "LFP Recording")
+    else if (presetName == "Low Frequency (32ch, 1kHz)")
     {
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
         channelEditor->setText("lfp_data");
         streamModeButton->setToggleState(true, dontSendNotification);
+        alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for LFP recording
         sampleRateEditor->setText("1000");
-        numChannelsEditor->setText("64");
+        numChannelsEditor->setText("32");
         dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
         bufferSizeEditor->setText("2000");
         openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
     }
-    else if (presetName == "Behavioral Data")
+    else if (presetName == "Testing (8ch, 1kHz)")
     {
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("behavior_data");
-        streamModeButton->setToggleState(false, dontSendNotification); // Use list mode for behavioral
-        sampleRateEditor->setText("100");
+        channelEditor->setText("test_data");
+        streamModeButton->setToggleState(false, dontSendNotification);
+        alwaysLatestButton->setToggleState(true, dontSendNotification); // Enable for testing
+        sampleRateEditor->setText("1000");
         numChannelsEditor->setText("8");
-        dataFormatCombo->setSelectedItemIndex(1); // JSON for flexibility
-        bufferSizeEditor->setText("500");
+        dataFormatCombo->setSelectedItemIndex(1); // JSON
+        bufferSizeEditor->setText("1000");
         openEphysFormatButton->setToggleState(false, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
+    }
+
+    else
+    {
+        // Try to load custom preset from file
+        File appDataDir = File::getSpecialLocation(File::userApplicationDataDirectory);
+        File presetsDir = appDataDir.getChildFile("Open Ephys").getChildFile("RedisDataThread").getChildFile("Presets");
+        File presetFile = presetsDir.getChildFile(presetName + ".xml");
+
+        if (presetFile.exists())
+        {
+            XmlDocument doc(presetFile);
+            std::unique_ptr<XmlElement> xml = doc.getDocumentElement();
+
+            if (xml != nullptr && xml->hasTagName("REDIS_PRESET"))
+            {
+                // Load custom preset
+                hostEditor->setText(xml->getStringAttribute("redisHost", "localhost"));
+                portEditor->setText(xml->getStringAttribute("redisPort", "6379"));
+                passwordEditor->setText(xml->getStringAttribute("redisPassword", ""));
+                channelEditor->setText(xml->getStringAttribute("redisChannel", "neural_data"));
+                streamModeButton->setToggleState(xml->getBoolAttribute("streamMode", true), dontSendNotification);
+                alwaysLatestButton->setToggleState(xml->getBoolAttribute("alwaysReadLatest", true), dontSendNotification);
+                sampleRateEditor->setText(xml->getStringAttribute("sampleRate", "30000"));
+                numChannelsEditor->setText(xml->getStringAttribute("numChannels", "32"));
+                dataFormatCombo->setSelectedItemIndex(xml->getIntAttribute("dataFormat", 0));
+                bufferSizeEditor->setText(xml->getStringAttribute("bufferSize", "5000"));
+                openEphysFormatButton->setToggleState(xml->getBoolAttribute("openEphysFormat", true), dontSendNotification);
+                dataValidationButton->setToggleState(xml->getBoolAttribute("dataValidation", true), dontSendNotification);
+
+                LOGD("Loaded custom preset: ", presetName);
+            }
+            else
+            {
+                AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                           "Load Error",
+                                           "Invalid preset file format: " + presetName);
+                return;
+            }
+        }
+        else
+        {
+            AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                       "Preset Not Found",
+                                       "Preset '" + presetName + "' not found.");
+            return;
+        }
     }
 
     // Apply the preset
@@ -1070,7 +1129,8 @@ void RedisConfigurationPanel::showHelpDialog()
 
         "STREAM SETTINGS:\n"
         "• Channel: Redis channel/stream name for data\n"
-        "• Stream Mode: Enable for Redis Streams (XREAD), disable for Lists (BLPOP)\n\n"
+        "• Stream Mode: Enable for Redis Streams (XREAD), disable for Lists (BLPOP)\n"
+        "• Always Latest: Always read newest data (enable for monitoring, disable for recording)\n\n"
 
         "DATA FORMAT:\n"
         "• Sample Rate: Expected sampling frequency in Hz\n"
@@ -1086,14 +1146,10 @@ void RedisConfigurationPanel::showHelpDialog()
         "• Data Validation: Enable real-time data checking\n\n"
 
         "PRESETS:\n"
-        "• Default: Basic configuration for testing\n"
-        "• BRANDBCI Standard: Optimized for BRANDBCI systems\n"
-        "• Local Testing: Low-resource configuration for development\n"
-        "• High Performance: Maximum throughput configuration\n"
-        "• Utah Array 96ch: Optimized for 96-channel Utah arrays\n"
-        "• Neuropixels: High-density probe configuration (384 channels)\n"
-        "• LFP Recording: Low-frequency local field potential recording\n"
-        "• Behavioral Data: Low-rate behavioral/event data\n\n"
+        "• Default (32ch, 30kHz): Standard neural recording configuration\n"
+        "• High Density (96ch, 30kHz): High-channel count neural recording\n"
+        "• Low Frequency (32ch, 1kHz): LFP and slow signal recording\n"
+        "• Testing (8ch, 1kHz): Development and testing configuration\n\n"
 
         "PERFORMANCE TIPS:\n"
         "• Use Binary format for highest performance\n"
@@ -1211,4 +1267,68 @@ void RedisConfigurationPanel::showLatestData()
 
     // Show popup using the PopupManager
     CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
+}
+
+void RedisConfigurationPanel::savePreset(const String& presetName)
+{
+    // Get the application data directory
+    File appDataDir = File::getSpecialLocation(File::userApplicationDataDirectory);
+    File openEphysDir = appDataDir.getChildFile("Open Ephys");
+    File presetsDir = openEphysDir.getChildFile("RedisDataThread").getChildFile("Presets");
+
+    // Create directories if they don't exist
+    if (!presetsDir.exists())
+    {
+        presetsDir.createDirectory();
+    }
+
+    // Create preset file
+    File presetFile = presetsDir.getChildFile(presetName + ".xml");
+
+    // Create XML document
+    XmlElement xml("REDIS_PRESET");
+    xml.setAttribute("name", presetName);
+    xml.setAttribute("version", "1.0");
+
+    // Save current configuration
+    xml.setAttribute("redisHost", hostEditor->getText());
+    xml.setAttribute("redisPort", portEditor->getText());
+    xml.setAttribute("redisPassword", passwordEditor->getText());
+    xml.setAttribute("redisChannel", channelEditor->getText());
+    xml.setAttribute("streamMode", streamModeButton->getToggleState());
+    xml.setAttribute("alwaysReadLatest", alwaysLatestButton->getToggleState());
+    xml.setAttribute("sampleRate", sampleRateEditor->getText());
+    xml.setAttribute("numChannels", numChannelsEditor->getText());
+    xml.setAttribute("dataFormat", dataFormatCombo->getSelectedItemIndex());
+    xml.setAttribute("bufferSize", bufferSizeEditor->getText());
+    xml.setAttribute("openEphysFormat", openEphysFormatButton->getToggleState());
+    xml.setAttribute("dataValidation", dataValidationButton->getToggleState());
+
+    // Write to file
+    if (!xml.writeTo(presetFile))
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Save Error",
+                                   "Failed to save preset to: " + presetFile.getFullPathName());
+    }
+    else
+    {
+        LOGD("Preset saved: ", presetFile.getFullPathName());
+
+        // Add to combo box if not already present
+        bool found = false;
+        for (int i = 0; i < presetCombo->getNumItems(); i++)
+        {
+            if (presetCombo->getItemText(i) == presetName)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            presetCombo->addItem(presetName, presetCombo->getNumItems() + 1);
+        }
+    }
 }
