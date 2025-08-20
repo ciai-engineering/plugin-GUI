@@ -25,6 +25,7 @@
 #define __REDISCONFIGURATIONPANEL_H_INCLUDED__
 
 #include <EditorHeaders.h>
+#include "CustomTooltipComponent.h"
 
 class RedisDataThread;
 
@@ -68,8 +69,6 @@ public:
 
     /** Timer interface for status updates */
     void timerCallback() override;
-
-
 
     /** Update UI with current settings */
     void updateFromThread();
@@ -151,9 +150,11 @@ private:
     
     std::unique_ptr<Label> openEphysFormatLabel;
     std::unique_ptr<ToggleButton> openEphysFormatButton;
-    
+    std::unique_ptr<Label> openEphysFormatTooltip;
+
     std::unique_ptr<Label> dataValidationLabel;
     std::unique_ptr<ToggleButton> dataValidationButton;
+    std::unique_ptr<Label> dataValidationTooltip;
     
     // Preset and control buttons
     std::unique_ptr<ComboBox> presetCombo;
