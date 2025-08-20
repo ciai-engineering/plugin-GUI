@@ -35,7 +35,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , maxDataChannels(1024)        // Set maximum limit
     , dataFormat("brandbci")
     , autoDetectChannels(true)     // Enable auto-detection by default
-    , bufferSize(10000)            // Default buffer size: 10000 samples
+    , bufferSize(50000)            // Default buffer size: 50000 samples (increased for large data blocks)
     , useStreamMode(true)
     , currentStreamId("$")  // Start from latest data, not from beginning
     , alwaysReadLatest(false)  // Sequential reading by default (no data loss)
@@ -1621,7 +1621,7 @@ bool RedisDataThread::validateStreamData(const OpenEphysStreamData& data)
 
     if (data.n_samples > 10000)
     {
-        LOGD("Warning: Unusually high sample count: ", data.n_samples);
+        LOGD("Warning: Unusually high sample count: ", data.n_samples, " - will process in chunks");
     }
 
     LOGD("Open Ephys stream data validation passed");
@@ -1895,7 +1895,48 @@ bool RedisDataThread::addMultiSampleDataToBuffer(const Array<float>& channelData
 
     LOGD("Processing ", nSamples, " samples with ", nChannels, " channels each");
 
-    // Process samples one by one
+    // For large data blocks, process in chunks to avoid buffer overflow
+    const int MAX_CHUNK_SIZE = 5000; // Process max 5000 samples at a time
+
+    if (nSamples > MAX_CHUNK_SIZE)
+    {
+        LOGD("Large data block detected (", nSamples, " samples). Processing in chunks of ", MAX_CHUNK_SIZE);
+
+        int processedSamples = 0;
+        while (processedSamples < nSamples)
+        {
+            int chunkSize = jmin(MAX_CHUNK_SIZE, nSamples - processedSamples);
+
+            // Extract chunk data
+            Array<float> chunkData;
+            chunkData.ensureStorageAllocated(nChannels * chunkSize);
+
+            for (int sample = 0; sample < chunkSize; sample++)
+            {
+                for (int ch = 0; ch < nChannels; ch++)
+                {
+                    int sourceIndex = (processedSamples + sample) * nChannels + ch;
+                    chunkData.add(channelData[sourceIndex]);
+                }
+            }
+
+            // Process chunk recursively
+            double chunkTimestamp = baseTimestamp + (processedSamples / (double)sampleRate);
+            if (!addMultiSampleDataToBuffer(chunkData, nChannels, chunkSize, chunkTimestamp, sampleRate))
+            {
+                LOGE("Failed to process chunk starting at sample ", processedSamples);
+                return false;
+            }
+
+            processedSamples += chunkSize;
+            LOGD("Processed chunk: ", processedSamples, "/", nSamples, " samples");
+        }
+
+        LOGD("Successfully processed all ", nSamples, " samples in chunks");
+        return true;
+    }
+
+    // Process samples one by one for smaller blocks
     for (int sample = 0; sample < nSamples; sample++)
     {
         // Extract current sample's channel data
@@ -2044,6 +2085,11 @@ bool RedisDataThread::validateBufferSize(int size) const
         LOGD("Warning: Large buffer size (", size, " samples) will cause high latency");
     }
 
+    // Recommend buffer size for large data blocks
+    if (size < 30000) {
+        LOGD("Info: For processing large data blocks (>10k samples), consider buffer size >= 30000");
+    }
+
     return true;
 }
 
@@ -2096,7 +2142,7 @@ void RedisDataThread::loadConfigurationFromXml(XmlElement* customParamsXml)
     numDataChannels = mainNode->getIntAttribute("numDataChannels", 32);
 
     // Load advanced settings
-    bufferSize = mainNode->getIntAttribute("bufferSize", 10000);
+    bufferSize = mainNode->getIntAttribute("bufferSize", 50000);
     enableOpenEphysFormat = mainNode->getBoolAttribute("enableOpenEphysFormat", true);
     enableDataValidation = mainNode->getBoolAttribute("enableDataValidation", true);
 
