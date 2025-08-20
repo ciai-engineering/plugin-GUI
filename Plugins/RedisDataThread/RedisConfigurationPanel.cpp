@@ -68,7 +68,7 @@ void RedisConfigurationPanel::resized()
 {
     int yPos = 35;
     int connectionGroupHeight = 150; // Increased to accommodate Test button
-    int streamGroupHeight = 130;     // Reduced height to minimize bottom spacing
+    int streamGroupHeight = 155;     // Increased height to accommodate View Data button
     int formatGroupHeight = 120;     // Keep original height
     int advancedGroupHeight = 120;   // Keep original height
     int margin = 10;
@@ -102,15 +102,20 @@ void RedisConfigurationPanel::resized()
         yPos += advancedGroupHeight + groupSpacing;
     }
     
-    // Control buttons - now in a single row
-    if (presetCombo)
-        presetCombo->setBounds(margin, yPos, 120, 25);
-    if (resetButton)
-        resetButton->setBounds(margin + 130, yPos, 60, 25);
-    if (savePresetButton)
-        savePresetButton->setBounds(margin + 200, yPos, 100, 25);
+    // Control buttons - redesigned with proper visual hierarchy and grouping
+    // Help button (tertiary) - positioned on the left as utility
     if (helpButton)
-        helpButton->setBounds(margin + 310, yPos, 50, 25);
+        helpButton->setBounds(margin, yPos, 50, 26); // Slightly taller for better touch target
+
+    // Configuration group - preset selection and reset (with visual separation)
+    if (presetCombo)
+        presetCombo->setBounds(margin + 70, yPos, 125, 26); // Grouped with reset, more space from help
+    if (resetButton)
+        resetButton->setBounds(margin + 205, yPos, 70, 26); // Danger action, needs more space
+
+    // Primary action - save preset (most important, positioned on the right with separation)
+    if (savePresetButton)
+        savePresetButton->setBounds(margin + 295, yPos, 100, 26); // Primary button, larger, more separation
 
     yPos += 35;
 
@@ -133,9 +138,9 @@ void RedisConfigurationPanel::createConnectionGroup()
 {
     connectionGroup = std::make_unique<GroupComponent>("Connection", "Connection Settings");
     addAndMakeVisible(connectionGroup.get());
-    
-    int yOffset = 25;
-    int rowHeight = 25;
+
+    int yOffset = 28; // Slightly more space from group title
+    int rowHeight = 26; // Slightly more breathing room
     int labelWidth = 80;
     int editorWidth = 120;
     int tooltipWidth = 150;
@@ -200,12 +205,11 @@ void RedisConfigurationPanel::createConnectionGroup()
     passwordTooltip->setColour(Label::textColourId, Colour(0x80808080));
     connectionGroup->addAndMakeVisible(passwordTooltip.get());
 
-    yOffset += rowHeight + 5; // Add some extra spacing
+    yOffset += rowHeight + 10; // Optimized spacing for visual consistency
 
     // Test connection button - increased width to show full text
     testConnectionButton = std::make_unique<UtilityButton>("Test Connection");
     testConnectionButton->setBounds(15, yOffset, 140, 25);
-    testConnectionButton->setFont(FontOptions("Inter", "Regular", 12)); // Consistent font
     testConnectionButton->addListener(this);
     connectionGroup->addAndMakeVisible(testConnectionButton.get());
 }
@@ -214,9 +218,9 @@ void RedisConfigurationPanel::createStreamGroup()
 {
     streamGroup = std::make_unique<GroupComponent>("Stream", "Data Stream Settings");
     addAndMakeVisible(streamGroup.get());
-    
-    int yOffset = 25;
-    int rowHeight = 25;
+
+    int yOffset = 28; // Consistent with other groups
+    int rowHeight = 26; // Consistent spacing
     int labelWidth = 80;
     int editorWidth = 120;
     int tooltipWidth = 150;
@@ -228,13 +232,13 @@ void RedisConfigurationPanel::createStreamGroup()
     streamGroup->addAndMakeVisible(channelLabel.get());
     
     channelEditor = std::make_unique<TextEditor>("Channel Editor");
-    channelEditor->setBounds(100, yOffset, editorWidth, 20);
+    channelEditor->setBounds(100, yOffset, 130, 20); // Optimized width for content
     channelEditor->setTextToShowWhenEmpty("neural_data", Colours::grey);
     channelEditor->addListener(this);
     streamGroup->addAndMakeVisible(channelEditor.get());
-    
+
     channelTooltip = std::make_unique<Label>("Channel Tooltip", "(stream identifier)");
-    channelTooltip->setBounds(230, yOffset, 120, 20);
+    channelTooltip->setBounds(240, yOffset, 120, 20); // Adjusted position
     channelTooltip->setFont(FontOptions("Inter", "Regular", 10));
     channelTooltip->setColour(Label::textColourId, Colour(0x80808080));
     streamGroup->addAndMakeVisible(channelTooltip.get());
@@ -277,12 +281,11 @@ void RedisConfigurationPanel::createStreamGroup()
     alwaysLatestTooltip->setColour(Label::textColourId, Colour(0x80808080));
     streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
 
-    yOffset += rowHeight + 2; // Reduced spacing to minimize bottom gap
+    yOffset += rowHeight + 15; // Adjusted spacing to align with other groups' bottom margins
 
-    // Data button - reduced width as text is shorter
+    // Data button - significantly increased width to show full text
     dataButton = std::make_unique<UtilityButton>("View Data");
-    dataButton->setBounds(15, yOffset, 90, 25);
-    dataButton->setFont(FontOptions("Inter", "Regular", 12)); // Consistent font
+    dataButton->setBounds(15, yOffset, 160, 25); // Increased to 160px to ensure full text visibility
     dataButton->addListener(this);
     streamGroup->addAndMakeVisible(dataButton.get());
 }
@@ -398,8 +401,8 @@ void RedisConfigurationPanel::createFormatGroup()
     formatGroup = std::make_unique<GroupComponent>("Format", "Data Format Settings");
     addAndMakeVisible(formatGroup.get());
 
-    int yOffset = 25;
-    int rowHeight = 25;
+    int yOffset = 28; // Consistent with other groups
+    int rowHeight = 26; // Consistent spacing
     int labelWidth = 80;
     int editorWidth = 120;
     int tooltipWidth = 150;
@@ -453,7 +456,7 @@ void RedisConfigurationPanel::createFormatGroup()
     formatGroup->addAndMakeVisible(dataFormatLabel.get());
 
     dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
-    dataFormatCombo->setBounds(100, yOffset, 100, 20);
+    dataFormatCombo->setBounds(100, yOffset, 160, 20); // Further increased to show full text
     dataFormatCombo->addItem("BRANDBCI (recommended)", 1);
     dataFormatCombo->addItem("JSON (general)", 2);
     dataFormatCombo->addItem("Binary (performance)", 3);
@@ -461,7 +464,7 @@ void RedisConfigurationPanel::createFormatGroup()
     formatGroup->addAndMakeVisible(dataFormatCombo.get());
 
     dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
-    dataFormatTooltip->setBounds(210, yOffset, 120, 20);
+    dataFormatTooltip->setBounds(270, yOffset, 120, 20); // Adjusted position
     dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
     dataFormatTooltip->setColour(Label::textColourId, Colour(0x80808080));
     formatGroup->addAndMakeVisible(dataFormatTooltip.get());
@@ -472,8 +475,8 @@ void RedisConfigurationPanel::createAdvancedGroup()
     advancedGroup = std::make_unique<GroupComponent>("Advanced", "Advanced Settings");
     addAndMakeVisible(advancedGroup.get());
 
-    int yOffset = 25;
-    int rowHeight = 25;
+    int yOffset = 28; // Consistent with other groups
+    int rowHeight = 26; // Consistent spacing
     int labelWidth = 100;
     int editorWidth = 80;
 
@@ -496,8 +499,9 @@ void RedisConfigurationPanel::createAdvancedGroup()
     bufferSizeTooltip->setColour(Label::textColourId, Colour(0x80808080));
     advancedGroup->addAndMakeVisible(bufferSizeTooltip.get());
 
-    yOffset += rowHeight;
+    yOffset += rowHeight + 8; // Add more space to create visual separation
 
+    // Format Options section (grouped together for better logic)
     // Open Ephys Format
     openEphysFormatLabel = std::make_unique<Label>("OpenEphys Format Label", "OpenEphys Format:");
     openEphysFormatLabel->setBounds(15, yOffset, labelWidth, 20);
@@ -510,24 +514,26 @@ void RedisConfigurationPanel::createAdvancedGroup()
     advancedGroup->addAndMakeVisible(openEphysFormatButton.get());
 
     openEphysFormatTooltip = std::make_unique<Label>("OpenEphys Format Tooltip", "(native format)");
-    openEphysFormatTooltip->setBounds(150, yOffset, 80, 20);
+    openEphysFormatTooltip->setBounds(150, yOffset, 100, 20);
     openEphysFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
     openEphysFormatTooltip->setColour(Label::textColourId, Colour(0x80808080));
     advancedGroup->addAndMakeVisible(openEphysFormatTooltip.get());
 
-    // Data Validation
+    yOffset += rowHeight; // Normal spacing for related items
+
+    // Data Validation - logically grouped with format options
     dataValidationLabel = std::make_unique<Label>("Data Validation Label", "Data Validation:");
-    dataValidationLabel->setBounds(240, yOffset, labelWidth, 20);
+    dataValidationLabel->setBounds(15, yOffset, labelWidth, 20);
     dataValidationLabel->setFont(FontOptions("Inter", "Regular", 12));
     advancedGroup->addAndMakeVisible(dataValidationLabel.get());
 
     dataValidationButton = std::make_unique<ToggleButton>("Data Validation");
-    dataValidationButton->setBounds(345, yOffset, 20, 20);
+    dataValidationButton->setBounds(120, yOffset, 20, 20);
     dataValidationButton->addListener(this);
     advancedGroup->addAndMakeVisible(dataValidationButton.get());
 
     dataValidationTooltip = std::make_unique<Label>("Data Validation Tooltip", "(error checking)");
-    dataValidationTooltip->setBounds(375, yOffset, 90, 20);
+    dataValidationTooltip->setBounds(150, yOffset, 100, 20);
     dataValidationTooltip->setFont(FontOptions("Inter", "Regular", 10));
     dataValidationTooltip->setColour(Label::textColourId, Colour(0x80808080));
     advancedGroup->addAndMakeVisible(dataValidationTooltip.get());
@@ -535,24 +541,31 @@ void RedisConfigurationPanel::createAdvancedGroup()
 
 void RedisConfigurationPanel::createControlButtons()
 {
-    // Preset selector
+    // Preset selector (Secondary style)
     presetCombo = std::make_unique<ComboBox>("Preset Combo");
     presetCombo->addListener(this);
+    // Set secondary style for preset combo
+    presetCombo->setColour(ComboBox::backgroundColourId, Colour(0xFFECF0F1)); // Light background
+    presetCombo->setColour(ComboBox::textColourId, Colour(0xFF2C3E50)); // Dark text
+    presetCombo->setColour(ComboBox::outlineColourId, Colour(0xFFBDC3C7)); // Light border
     addAndMakeVisible(presetCombo.get());
 
-    // Reset button
-    resetButton = std::make_unique<UtilityButton>("Reset");
+    // Reset button (Danger style)
+    resetButton = std::make_unique<CustomStyledButton>("Reset");
     resetButton->addListener(this);
+    resetButton->setCustomColours(Colour(0xFFE74C3C), Colours::white, Colour(0xFFC0392B)); // Red background, white text, darker red when pressed
     addAndMakeVisible(resetButton.get());
 
-    // Save preset button
-    savePresetButton = std::make_unique<UtilityButton>("Save Preset");
+    // Save preset button (Primary style)
+    savePresetButton = std::make_unique<CustomStyledButton>("Save Preset");
     savePresetButton->addListener(this);
+    savePresetButton->setCustomColours(Colour(0xFF3498DB), Colours::white, Colour(0xFF2980B9)); // Blue background, white text, darker blue when pressed
     addAndMakeVisible(savePresetButton.get());
 
-    // Help button
-    helpButton = std::make_unique<UtilityButton>("Help");
+    // Help button (Tertiary style - subtle)
+    helpButton = std::make_unique<CustomStyledButton>("Help");
     helpButton->addListener(this);
+    helpButton->setCustomColours(Colour(0xFFBDC3C7), Colour(0xFF2C3E50), Colour(0xFF95A5A6)); // Light gray background, dark text, slightly darker when pressed
     addAndMakeVisible(helpButton.get());
 
     // Status indicators

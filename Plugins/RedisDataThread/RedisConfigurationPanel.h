@@ -29,6 +29,42 @@
 
 class RedisDataThread;
 
+// Custom button class that supports custom colors
+class CustomStyledButton : public Button
+{
+public:
+    CustomStyledButton(const String& buttonName) : Button(buttonName) {}
+
+    void setCustomColours(Colour background, Colour text, Colour backgroundPressed = Colour())
+    {
+        backgroundColour = background;
+        textColour = text;
+        backgroundPressedColour = backgroundPressed.isTransparent() ? background.darker(0.2f) : backgroundPressed;
+    }
+
+private:
+    void paintButton(Graphics& g, bool isMouseOver, bool isButtonDown) override
+    {
+        auto baseColour = backgroundColour;
+
+        if (isButtonDown)
+            baseColour = backgroundPressedColour;
+        else if (isMouseOver)
+            baseColour = backgroundColour.brighter(0.1f);
+
+        g.setColour(baseColour);
+        g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
+
+        g.setColour(textColour);
+        g.setFont(14.0f);
+        g.drawFittedText(getButtonText(), getLocalBounds(), Justification::centred, 1);
+    }
+
+    Colour backgroundColour = Colours::lightgrey;
+    Colour textColour = Colours::black;
+    Colour backgroundPressedColour = Colours::darkgrey;
+};
+
 /**
  * Configuration panel with grouped settings for Redis connection
  * 
@@ -159,9 +195,9 @@ private:
     // Preset and control buttons
     std::unique_ptr<ComboBox> presetCombo;
     std::unique_ptr<UtilityButton> testConnectionButton;
-    std::unique_ptr<UtilityButton> resetButton;
-    std::unique_ptr<UtilityButton> savePresetButton;
-    std::unique_ptr<UtilityButton> helpButton;
+    std::unique_ptr<CustomStyledButton> resetButton;
+    std::unique_ptr<CustomStyledButton> savePresetButton;
+    std::unique_ptr<CustomStyledButton> helpButton;
     std::unique_ptr<UtilityButton> dataButton;
 
     // Status indicators
