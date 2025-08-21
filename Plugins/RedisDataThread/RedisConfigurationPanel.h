@@ -29,6 +29,7 @@
 
 class RedisDataThread;
 class RedisSavePresetPopup;
+class RedisChannelScanPopup;
 
 
 

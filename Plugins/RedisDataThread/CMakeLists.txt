@@ -29,6 +29,7 @@ add_sources(${PLUGIN_NAME} RedisDataThread.cpp RedisDataThread.h
             RedisDataThreadEditor.cpp RedisDataThreadEditor.h
             RedisDataDisplayPopup.cpp RedisDataDisplayPopup.h
             RedisConnectionTestPopup.cpp RedisConnectionTestPopup.h
+            RedisChannelScanPopup.cpp RedisChannelScanPopup.h
             RedisHelpPopup.cpp RedisHelpPopup.h
             RedisSavePresetPopup.cpp RedisSavePresetPopup.h
             RedisConfigurationPanel.cpp RedisConfigurationPanel.h

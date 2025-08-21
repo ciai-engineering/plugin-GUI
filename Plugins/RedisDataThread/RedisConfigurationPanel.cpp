@@ -25,6 +25,7 @@
 #include "RedisDataThread.h"
 #include "RedisDataDisplayPopup.h"
 #include "RedisConnectionTestPopup.h"
+#include "RedisChannelScanPopup.h"
 #include "RedisHelpPopup.h"
 #include "RedisSavePresetPopup.h"
 #include <CoreServicesHeader.h>
@@ -235,20 +236,20 @@ void RedisConfigurationPanel::createStreamGroup()
     streamGroup->addAndMakeVisible(channelLabel.get());
 
     channelComboBox = std::make_unique<ComboBox>("Channel ComboBox");
-    channelComboBox->setBounds(100, yOffset, 130, 20);
+    channelComboBox->setBounds(100, yOffset, 160, 20); // Optimized width: 160px (standard 120 + 40 for long names)
     channelComboBox->setEditableText(true); // Allow manual input
     channelComboBox->setTextWhenNothingSelected("neural_data");
     channelComboBox->addListener(this);
     streamGroup->addAndMakeVisible(channelComboBox.get());
 
     refreshChannelsButton = std::make_unique<UtilityButton>("R");
-    refreshChannelsButton->setBounds(235, yOffset, 25, 20);
+    refreshChannelsButton->setBounds(265, yOffset, 25, 20); // Positioned right after ComboBox with 5px gap
     refreshChannelsButton->setTooltip("Refresh available channels from Redis");
     refreshChannelsButton->addListener(this);
     streamGroup->addAndMakeVisible(refreshChannelsButton.get());
 
     channelTooltip = std::make_unique<Label>("Channel Tooltip", "(stream identifier)");
-    channelTooltip->setBounds(265, yOffset, 120, 20);
+    channelTooltip->setBounds(295, yOffset, 120, 20); // Positioned after refresh button with 5px gap
     channelTooltip->setFont(FontOptions("Inter", "Regular", 10));
     channelTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(channelTooltip.get());
@@ -1200,20 +1201,27 @@ void RedisConfigurationPanel::refreshAvailableChannels()
         channelComboBox->addItem("No channels found", 1);
         channelComboBox->setSelectedItemIndex(0);
 
-        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                   "No Channels Found",
-                                   "No streams or lists were found in the Redis database.\n\n"
-                                   "Make sure your data source is writing to Redis and try again.");
+        // Will show popup after ComboBox update
     }
     else
     {
-        // Add found channels to combo box
+        // Add found channels to combo box with optimized display
         for (int i = 0; i < channels.size(); i++)
         {
             String channelInfo = channels[i];
             String channelName = channelInfo.upToFirstOccurrenceOf(" (", false, false);
 
-            channelComboBox->addItem(channelInfo, i + 1);
+            // For very long channel names, create a shortened display version for the dropdown
+            String displayText = channelInfo;
+            if (channelInfo.length() > 45) // If text is too long for comfortable reading
+            {
+                String shortName = channelName.length() > 25 ?
+                    channelName.substring(0, 22) + "..." : channelName;
+                String typeInfo = channelInfo.fromFirstOccurrenceOf(" (", true, false);
+                displayText = shortName + typeInfo;
+            }
+
+            channelComboBox->addItem(displayText, i + 1);
         }
 
         // Try to select current channel if it exists
@@ -1234,18 +1242,17 @@ void RedisConfigurationPanel::refreshAvailableChannels()
             channelComboBox->setSelectedItemIndex(0);
         }
 
-        String channelList;
-        for (int i = 0; i < channels.size(); i++)
-        {
-            channelList += channels[i];
-            if (i < channels.size() - 1) channelList += "\n";
-        }
-
-        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                   "Channels Found",
-                                   "Found " + String(channels.size()) + " available channels/streams:\n\n" +
-                                   channelList);
     }
+
+    // Create and show popup with scan results (consistent with Test Connection)
+    auto popup = std::make_unique<RedisChannelScanPopup>(
+        !channels.isEmpty(),  // success = true if channels found
+        channels,             // channel list
+        channels.isEmpty() ? "No channels found in Redis database" : ""
+    );
+
+    // Show popup using the PopupManager (same as Test Connection)
+    CoreServices::getPopupManager()->showPopup(std::move(popup), refreshChannelsButton.get());
 
     // Re-enable refresh button
     refreshChannelsButton->setEnabled(true);
