@@ -159,6 +159,11 @@ void RedisConfigurationPanel::createConnectionGroup()
     hostEditor->setBounds(100, yOffset, editorWidth, 20);
     hostEditor->setTextToShowWhenEmpty("localhost", Colours::grey);
     hostEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    hostEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    hostEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    hostEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    hostEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     connectionGroup->addAndMakeVisible(hostEditor.get());
     
     hostTooltip = std::make_unique<Label>("Host Tooltip", "(IP or hostname)");
@@ -180,6 +185,11 @@ void RedisConfigurationPanel::createConnectionGroup()
     portEditor->setTextToShowWhenEmpty("6379", Colours::grey);
     portEditor->setInputRestrictions(5, "0123456789");
     portEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    portEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    portEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    portEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    portEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     connectionGroup->addAndMakeVisible(portEditor.get());
     
     portTooltip = std::make_unique<Label>("Port Tooltip", "(1-65535)");
@@ -201,6 +211,11 @@ void RedisConfigurationPanel::createConnectionGroup()
     passwordEditor->setPasswordCharacter('*');
     passwordEditor->setTextToShowWhenEmpty("(optional)", Colours::grey);
     passwordEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    passwordEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    passwordEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    passwordEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    passwordEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     connectionGroup->addAndMakeVisible(passwordEditor.get());
     
     passwordTooltip = std::make_unique<Label>("Password Tooltip", "(leave empty if none)");
@@ -240,6 +255,10 @@ void RedisConfigurationPanel::createStreamGroup()
     channelComboBox->setEditableText(true); // Allow manual input
     channelComboBox->setTextWhenNothingSelected("neural_data");
     channelComboBox->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    channelComboBox->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    channelComboBox->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    channelComboBox->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
     streamGroup->addAndMakeVisible(channelComboBox.get());
 
     refreshChannelsButton = std::make_unique<UtilityButton>("R");
@@ -433,6 +452,11 @@ void RedisConfigurationPanel::createFormatGroup()
     sampleRateEditor->setTextToShowWhenEmpty("30000", Colours::grey);
     sampleRateEditor->setInputRestrictions(0, "0123456789.");
     sampleRateEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    sampleRateEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    sampleRateEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    sampleRateEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    sampleRateEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     formatGroup->addAndMakeVisible(sampleRateEditor.get());
 
     sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "(Hz)");
@@ -454,6 +478,11 @@ void RedisConfigurationPanel::createFormatGroup()
     numChannelsEditor->setTextToShowWhenEmpty("32", Colours::grey);
     numChannelsEditor->setInputRestrictions(4, "0123456789");
     numChannelsEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    numChannelsEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    numChannelsEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    numChannelsEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    numChannelsEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     formatGroup->addAndMakeVisible(numChannelsEditor.get());
 
     numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "(1-1024)");
@@ -471,15 +500,20 @@ void RedisConfigurationPanel::createFormatGroup()
     formatGroup->addAndMakeVisible(dataFormatLabel.get());
 
     dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
-    dataFormatCombo->setBounds(100, yOffset, 160, 20); // Further increased to show full text
+    dataFormatCombo->setBounds(100, yOffset, 180, 20); // Increased width to prevent text distortion
     dataFormatCombo->addItem("BRANDBCI (recommended)", 1);
     dataFormatCombo->addItem("JSON (general)", 2);
     dataFormatCombo->addItem("Binary (performance)", 3);
     dataFormatCombo->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    dataFormatCombo->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    dataFormatCombo->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    dataFormatCombo->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
+    dataFormatCombo->setColour(ComboBox::focusedOutlineColourId, findColour(ThemeColours::outline));
     formatGroup->addAndMakeVisible(dataFormatCombo.get());
 
     dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
-    dataFormatTooltip->setBounds(270, yOffset, 120, 20); // Adjusted position
+    dataFormatTooltip->setBounds(290, yOffset, 120, 20); // Adjusted position for wider ComboBox
     dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
     dataFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     formatGroup->addAndMakeVisible(dataFormatTooltip.get());
@@ -506,6 +540,11 @@ void RedisConfigurationPanel::createAdvancedGroup()
     bufferSizeEditor->setTextToShowWhenEmpty("1000", Colours::grey);
     bufferSizeEditor->setInputRestrictions(6, "0123456789");
     bufferSizeEditor->addListener(this);
+    // Apply consistent theme colors for unified appearance
+    bufferSizeEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    bufferSizeEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    bufferSizeEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    bufferSizeEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
     advancedGroup->addAndMakeVisible(bufferSizeEditor.get());
 
     bufferSizeTooltip = std::make_unique<Label>("Buffer Size Tooltip", "(samples)");
