@@ -67,9 +67,9 @@ void RedisConnectionTestPopup::setupUI()
     statusLabel->setJustificationType(Justification::left);
     addAndMakeVisible(statusLabel.get());
 
-    // Details text editor (read-only)
+    // Details text editor (read-only) - adjusted to avoid OK button overlap
     detailsTextEditor = std::make_unique<TextEditor>("Details Text Editor");
-    detailsTextEditor->setBounds(20, 85, getWidth() - 40, getHeight() - 125);
+    detailsTextEditor->setBounds(20, 85, getWidth() - 40, getHeight() - 140); // Increased bottom margin from 125 to 140
     detailsTextEditor->setMultiLine(true);
     detailsTextEditor->setReadOnly(true);
     detailsTextEditor->setScrollbarsShown(true);
@@ -106,7 +106,7 @@ void RedisConnectionTestPopup::resized()
         statusLabel->setBounds(70, 50, getWidth() - 90, 20);
 
     if (detailsTextEditor != nullptr)
-        detailsTextEditor->setBounds(20, 85, getWidth() - 40, getHeight() - 125);
+        detailsTextEditor->setBounds(20, 85, getWidth() - 40, getHeight() - 140); // Consistent with setupUI
 
     if (okButton != nullptr)
         okButton->setBounds(getWidth() - 100, getHeight() - 45, 80, 25);
