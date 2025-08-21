@@ -29,7 +29,7 @@
 /**
  * Popup component for displaying Redis connection test results
  */
-class RedisConnectionTestPopup : public Component
+class RedisConnectionTestPopup : public Component, public Button::Listener
 {
 public:
     /** Constructor for successful connection */
@@ -44,6 +44,9 @@ public:
     /** Component resized method */
     void resized() override;
 
+    /** Button listener method */
+    void buttonClicked(Button* button) override;
+
 private:
     /** Setup the UI components */
     void setupUI();
@@ -54,6 +57,7 @@ private:
     // UI Components
     std::unique_ptr<Label> titleLabel;
     std::unique_ptr<Label> iconLabel;
+    std::unique_ptr<Label> statusLabel;
     std::unique_ptr<TextEditor> detailsTextEditor;
     std::unique_ptr<TextButton> okButton;
 

@@ -40,24 +40,27 @@ RedisConnectionTestPopup::~RedisConnectionTestPopup()
 
 void RedisConnectionTestPopup::setupUI()
 {
-    // Icon label (status symbol)
+    // Icon label (status symbol) - consistent with Channel Scan popup
     iconLabel = std::make_unique<Label>("Icon Label", connectionSuccess ? "OK" : "X");
     iconLabel->setBounds(20, 20, 40, 40);
-    iconLabel->setFont(FontOptions("Inter", "Regular", 24));
+    iconLabel->setFont(FontOptions("Inter", "Bold", 20));
     iconLabel->setJustificationType(Justification::centred);
+    iconLabel->setColour(Label::textColourId, connectionSuccess ? Colours::green : Colours::red);
     addAndMakeVisible(iconLabel.get());
 
-    // Title label
-    String titleText = connectionSuccess ? "Connection Test" : "Connection Test";
+    // Title label with status-based color
+    String titleText = connectionSuccess ? "Connection Test Results" : "Connection Test Failed";
     titleLabel = std::make_unique<Label>("Title Label", titleText);
     titleLabel->setBounds(70, 20, getWidth() - 90, 30);
     titleLabel->setFont(FontOptions("Inter", "Bold", 16));
     titleLabel->setJustificationType(Justification::left);
+    titleLabel->setColour(Label::textColourId,
+        connectionSuccess ? findColour(ThemeColours::defaultText) : Colours::red);
     addAndMakeVisible(titleLabel.get());
 
-    // Status subtitle
+    // Status subtitle with consistent color coding
     String statusText = connectionSuccess ? "Successfully connected to Redis server!" : "Connection failed";
-    auto statusLabel = std::make_unique<Label>("Status Label", statusText);
+    statusLabel = std::make_unique<Label>("Status Label", statusText);
     statusLabel->setBounds(70, 50, getWidth() - 90, 20);
     statusLabel->setFont(FontOptions("Inter", "Regular", 12));
     statusLabel->setColour(Label::textColourId, connectionSuccess ? Colours::green : Colours::red);
@@ -75,6 +78,12 @@ void RedisConnectionTestPopup::setupUI()
     detailsTextEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
     detailsTextEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::defaultText).withAlpha(0.3f));
     addAndMakeVisible(detailsTextEditor.get());
+
+    // OK button for consistency with other popups
+    okButton = std::make_unique<TextButton>("OK");
+    okButton->setBounds(getWidth() - 100, getHeight() - 45, 80, 25);
+    okButton->addListener(this);
+    addAndMakeVisible(okButton.get());
 }
 
 void RedisConnectionTestPopup::paint(Graphics& g)
@@ -89,12 +98,30 @@ void RedisConnectionTestPopup::resized()
 {
     if (iconLabel != nullptr)
         iconLabel->setBounds(20, 20, 40, 40);
-    
+
     if (titleLabel != nullptr)
         titleLabel->setBounds(70, 20, getWidth() - 90, 30);
-    
+
+    if (statusLabel != nullptr)
+        statusLabel->setBounds(70, 50, getWidth() - 90, 20);
+
     if (detailsTextEditor != nullptr)
         detailsTextEditor->setBounds(20, 85, getWidth() - 40, getHeight() - 125);
+
+    if (okButton != nullptr)
+        okButton->setBounds(getWidth() - 100, getHeight() - 45, 80, 25);
+}
+
+void RedisConnectionTestPopup::buttonClicked(Button* button)
+{
+    if (button == okButton.get())
+    {
+        // Close the popup properly using CallOutBox's exitModalState
+        if (auto* callOutBox = findParentComponentOfClass<CallOutBox>())
+        {
+            callOutBox->exitModalState(0);
+        }
+    }
 }
 
 String RedisConnectionTestPopup::formatConnectionDetails()
