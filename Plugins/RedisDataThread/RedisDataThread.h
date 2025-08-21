@@ -93,6 +93,9 @@ public:
     /** Data retrieval methods */
     Array<String> getLatestRecords(int numRecords = 10);
 
+    /** Get available channels/streams from Redis */
+    Array<String> getAvailableChannels();
+
     /** Configuration setters */
     void setRedisHost(const String& host);
     void setRedisPort(int port);

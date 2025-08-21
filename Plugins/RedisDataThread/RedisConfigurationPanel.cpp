@@ -233,15 +233,22 @@ void RedisConfigurationPanel::createStreamGroup()
     channelLabel->setBounds(15, yOffset, labelWidth, 20);
     channelLabel->setFont(FontOptions("Inter", "Regular", 12));
     streamGroup->addAndMakeVisible(channelLabel.get());
-    
-    channelEditor = std::make_unique<TextEditor>("Channel Editor");
-    channelEditor->setBounds(100, yOffset, 130, 20); // Optimized width for content
-    channelEditor->setTextToShowWhenEmpty("neural_data", Colours::grey);
-    channelEditor->addListener(this);
-    streamGroup->addAndMakeVisible(channelEditor.get());
+
+    channelComboBox = std::make_unique<ComboBox>("Channel ComboBox");
+    channelComboBox->setBounds(100, yOffset, 130, 20);
+    channelComboBox->setEditableText(true); // Allow manual input
+    channelComboBox->setTextWhenNothingSelected("neural_data");
+    channelComboBox->addListener(this);
+    streamGroup->addAndMakeVisible(channelComboBox.get());
+
+    refreshChannelsButton = std::make_unique<UtilityButton>("R");
+    refreshChannelsButton->setBounds(235, yOffset, 25, 20);
+    refreshChannelsButton->setTooltip("Refresh available channels from Redis");
+    refreshChannelsButton->addListener(this);
+    streamGroup->addAndMakeVisible(refreshChannelsButton.get());
 
     channelTooltip = std::make_unique<Label>("Channel Tooltip", "(stream identifier)");
-    channelTooltip->setBounds(240, yOffset, 120, 20); // Adjusted position
+    channelTooltip->setBounds(265, yOffset, 120, 20);
     channelTooltip->setFont(FontOptions("Inter", "Regular", 10));
     channelTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(channelTooltip.get());
@@ -300,8 +307,6 @@ void RedisConfigurationPanel::textEditorTextChanged(TextEditor& editor)
         validateField(hostEditor.get(), "host");
     else if (&editor == portEditor.get())
         validateField(portEditor.get(), "port");
-    else if (&editor == channelEditor.get())
-        validateField(channelEditor.get(), "channel");
     else if (&editor == sampleRateEditor.get())
         validateField(sampleRateEditor.get(), "sampleRate");
     else if (&editor == numChannelsEditor.get())
@@ -328,6 +333,20 @@ void RedisConfigurationPanel::comboBoxChanged(ComboBox* comboBox)
 {
     if (comboBox == dataFormatCombo.get())
     {
+        applyToThread();
+    }
+    else if (comboBox == channelComboBox.get())
+    {
+        // Extract channel name from the selected item (remove type info)
+        String selectedText = channelComboBox->getText();
+        String channelName = selectedText.upToFirstOccurrenceOf(" (", false, false);
+
+        // Update the combo box text to show just the channel name
+        if (channelName.isNotEmpty() && channelName != selectedText)
+        {
+            channelComboBox->setText(channelName, dontSendNotification);
+        }
+
         applyToThread();
     }
     else if (comboBox == presetCombo.get())
@@ -374,6 +393,10 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     else if (button == dataButton.get())
     {
         showLatestData();
+    }
+    else if (button == refreshChannelsButton.get())
+    {
+        refreshAvailableChannels();
     }
     else if (button == openEphysFormatButton.get() || button == dataValidationButton.get())
     {
@@ -587,7 +610,7 @@ void RedisConfigurationPanel::setupCustomTooltips()
     hostEditor->setTooltip("Redis Server Address");
     portEditor->setTooltip("Redis Server Port");
     passwordEditor->setTooltip("Redis Authentication Password");
-    channelEditor->setTooltip("Redis Channel/Stream Name");
+    channelComboBox->setTooltip("Redis Channel/Stream Name");
     streamModeButton->setTooltip("Enable Redis Stream Mode");
     alwaysLatestButton->setTooltip("Always Read Latest Data");
     sampleRateEditor->setTooltip("Sampling Rate (Hz)");
@@ -637,7 +660,7 @@ void RedisConfigurationPanel::updateFromThread()
     passwordEditor->setText(dataThread->getRedisPassword(), false);
 
     // Update stream settings
-    channelEditor->setText(dataThread->getRedisChannelName(), false);
+    channelComboBox->setText(dataThread->getRedisChannelName(), dontSendNotification);
     streamModeButton->setToggleState(dataThread->getStreamMode(), dontSendNotification);
     alwaysLatestButton->setToggleState(dataThread->getAlwaysReadLatest(), dontSendNotification);
 
@@ -668,7 +691,7 @@ void RedisConfigurationPanel::applyToThread()
     dataThread->setRedisPassword(passwordEditor->getText());
 
     // Apply stream settings
-    dataThread->setRedisChannel(channelEditor->getText());
+    dataThread->setRedisChannel(channelComboBox->getText());
     dataThread->setStreamMode(streamModeButton->getToggleState());
     dataThread->setAlwaysReadLatest(alwaysLatestButton->getToggleState());
 
@@ -714,14 +737,14 @@ bool RedisConfigurationPanel::validateAllSettings()
     }
 
     // Validate channel
-    if (channelEditor->getText().isEmpty())
+    if (channelComboBox->getText().isEmpty())
     {
-        showFieldError(channelEditor.get(), "Channel cannot be empty");
+        showFieldError(channelComboBox.get(), "Channel cannot be empty");
         allValid = false;
     }
     else
     {
-        clearFieldError(channelEditor.get());
+        clearFieldError(channelComboBox.get());
     }
 
     // Validate sample rate
@@ -933,7 +956,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("neural_data");
+        channelComboBox->setText("neural_data");
         streamModeButton->setToggleState(true, dontSendNotification);
         alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for complete data recording
         sampleRateEditor->setText("30000");
@@ -948,7 +971,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("neural_data_hd");
+        channelComboBox->setText("neural_data_hd");
         streamModeButton->setToggleState(true, dontSendNotification);
         alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for complete data recording
         sampleRateEditor->setText("30000");
@@ -963,7 +986,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("lfp_data");
+        channelComboBox->setText("lfp_data");
         streamModeButton->setToggleState(true, dontSendNotification);
         alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for LFP recording
         sampleRateEditor->setText("1000");
@@ -978,7 +1001,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         hostEditor->setText("localhost");
         portEditor->setText("6379");
         passwordEditor->setText("");
-        channelEditor->setText("test_data");
+        channelComboBox->setText("test_data");
         streamModeButton->setToggleState(false, dontSendNotification);
         alwaysLatestButton->setToggleState(true, dontSendNotification); // Enable for testing
         sampleRateEditor->setText("1000");
@@ -1007,7 +1030,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
                 hostEditor->setText(xml->getStringAttribute("redisHost", "localhost"));
                 portEditor->setText(xml->getStringAttribute("redisPort", "6379"));
                 passwordEditor->setText(xml->getStringAttribute("redisPassword", ""));
-                channelEditor->setText(xml->getStringAttribute("redisChannel", "neural_data"));
+                channelComboBox->setText(xml->getStringAttribute("redisChannel", "neural_data"));
                 streamModeButton->setToggleState(xml->getBoolAttribute("streamMode", true), dontSendNotification);
                 alwaysLatestButton->setToggleState(xml->getBoolAttribute("alwaysReadLatest", true), dontSendNotification);
                 sampleRateEditor->setText(xml->getStringAttribute("sampleRate", "30000"));
@@ -1121,7 +1144,7 @@ void RedisConfigurationPanel::testConnection()
         connectionSuccess,
         hostEditor->getText(),
         portEditor->getText(),
-        channelEditor->getText(),
+        channelComboBox->getText(),
         errorMessage
     );
 
@@ -1152,6 +1175,83 @@ void RedisConfigurationPanel::showLatestData()
     CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
 }
 
+void RedisConfigurationPanel::refreshAvailableChannels()
+{
+    if (!dataThread->isConnected())
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Not Connected",
+                                   "Please connect to Redis server first to scan for available channels.");
+        return;
+    }
+
+    // Disable refresh button temporarily
+    refreshChannelsButton->setEnabled(false);
+    refreshChannelsButton->setButtonText("...");
+
+    // Get available channels from Redis
+    Array<String> channels = dataThread->getAvailableChannels();
+
+    // Clear existing items
+    channelComboBox->clear();
+
+    if (channels.isEmpty())
+    {
+        channelComboBox->addItem("No channels found", 1);
+        channelComboBox->setSelectedItemIndex(0);
+
+        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
+                                   "No Channels Found",
+                                   "No streams or lists were found in the Redis database.\n\n"
+                                   "Make sure your data source is writing to Redis and try again.");
+    }
+    else
+    {
+        // Add found channels to combo box
+        for (int i = 0; i < channels.size(); i++)
+        {
+            String channelInfo = channels[i];
+            String channelName = channelInfo.upToFirstOccurrenceOf(" (", false, false);
+
+            channelComboBox->addItem(channelInfo, i + 1);
+        }
+
+        // Try to select current channel if it exists
+        String currentChannel = channelComboBox->getText();
+        bool found = false;
+        for (int i = 0; i < channels.size(); i++)
+        {
+            if (channels[i].startsWith(currentChannel))
+            {
+                channelComboBox->setSelectedItemIndex(i);
+                found = true;
+                break;
+            }
+        }
+
+        if (!found && channels.size() > 0)
+        {
+            channelComboBox->setSelectedItemIndex(0);
+        }
+
+        String channelList;
+        for (int i = 0; i < channels.size(); i++)
+        {
+            channelList += channels[i];
+            if (i < channels.size() - 1) channelList += "\n";
+        }
+
+        AlertWindow::showMessageBox(AlertWindow::InfoIcon,
+                                   "Channels Found",
+                                   "Found " + String(channels.size()) + " available channels/streams:\n\n" +
+                                   channelList);
+    }
+
+    // Re-enable refresh button
+    refreshChannelsButton->setEnabled(true);
+    refreshChannelsButton->setButtonText("R");
+}
+
 void RedisConfigurationPanel::savePreset(const String& presetName)
 {
     // Get the application data directory
@@ -1177,7 +1277,7 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
     xml.setAttribute("redisHost", hostEditor->getText());
     xml.setAttribute("redisPort", portEditor->getText());
     xml.setAttribute("redisPassword", passwordEditor->getText());
-    xml.setAttribute("redisChannel", channelEditor->getText());
+    xml.setAttribute("redisChannel", channelComboBox->getText());
     xml.setAttribute("streamMode", streamModeButton->getToggleState());
     xml.setAttribute("alwaysReadLatest", alwaysLatestButton->getToggleState());
     xml.setAttribute("sampleRate", sampleRateEditor->getText());

@@ -97,6 +97,9 @@ public:
     /** Show latest data from Redis */
     void showLatestData();
 
+    /** Refresh available channels from Redis */
+    void refreshAvailableChannels();
+
 private:
     RedisDataThread* dataThread;
     
@@ -122,7 +125,8 @@ private:
     
     // Stream settings
     std::unique_ptr<Label> channelLabel;
-    std::unique_ptr<TextEditor> channelEditor;
+    std::unique_ptr<ComboBox> channelComboBox;
+    std::unique_ptr<UtilityButton> refreshChannelsButton;
     std::unique_ptr<Label> channelTooltip;
     
     std::unique_ptr<Label> streamModeLabel;

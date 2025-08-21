@@ -494,6 +494,128 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
     return records;
 }
 
+Array<String> RedisDataThread::getAvailableChannels()
+{
+    Array<String> channels;
+
+#ifdef REDIS_ENABLED
+    if (!connectionStatus.load() || redisCtx == nullptr)
+    {
+        LOGD("Cannot get channels: not connected to Redis");
+        return channels;
+    }
+
+    LOGD("Scanning Redis for available channels/streams...");
+
+    // First, get current database info
+    redisReply* dbSizeReply = (redisReply*)redisCommand(redisCtx, "DBSIZE");
+    if (dbSizeReply && dbSizeReply->type == REDIS_REPLY_INTEGER)
+    {
+        LOGD("Current database has ", dbSizeReply->integer, " keys");
+    }
+    if (dbSizeReply) freeReplyObject(dbSizeReply);
+
+    // Scan all databases (0-15 are typical)
+    for (int db = 0; db < 16; db++)
+    {
+        // Select database
+        redisReply* selectReply = (redisReply*)redisCommand(redisCtx, "SELECT %d", db);
+        if (!selectReply || selectReply->type == REDIS_REPLY_ERROR)
+        {
+            if (selectReply) freeReplyObject(selectReply);
+            continue; // Skip this database
+        }
+        freeReplyObject(selectReply);
+
+        // Get all keys in this database
+        redisReply* reply = (redisReply*)redisCommand(redisCtx, "KEYS *");
+
+        if (reply == nullptr || reply->type != REDIS_REPLY_ARRAY)
+        {
+            if (reply) freeReplyObject(reply);
+            continue;
+        }
+
+        if (reply->elements > 0)
+        {
+            LOGD("Database ", db, " has ", reply->elements, " keys");
+
+            for (size_t i = 0; i < reply->elements; i++)
+            {
+                if (reply->element[i]->type == REDIS_REPLY_STRING)
+                {
+                    String keyName = String(reply->element[i]->str);
+
+                    // Check if this key is a stream or list
+                    redisReply* typeReply = (redisReply*)redisCommand(redisCtx, "TYPE %s", keyName.toRawUTF8());
+                    if (typeReply && (typeReply->type == REDIS_REPLY_STRING || typeReply->type == REDIS_REPLY_STATUS))
+                    {
+                        String keyType = String(typeReply->str);
+                        String dbPrefix = (db == 0) ? "" : "db" + String(db) + ":";
+
+                        if (keyType == "stream")
+                        {
+                            // It's a stream, check if it has data
+                            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "XLEN %s", keyName.toRawUTF8());
+                            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+                            {
+                                if (lenReply->integer > 0)
+                                {
+                                    channels.add(dbPrefix + keyName + " (stream, " + String(lenReply->integer) + " entries)");
+                                    LOGD("Found stream in db", db, ": ", keyName, " with ", lenReply->integer, " entries");
+                                }
+                                else
+                                {
+                                    channels.add(dbPrefix + keyName + " (stream, empty)");
+                                    LOGD("Found empty stream in db", db, ": ", keyName);
+                                }
+                            }
+                            if (lenReply) freeReplyObject(lenReply);
+                        }
+                        else if (keyType == "list")
+                        {
+                            // It's a list, check if it has data
+                            redisReply* lenReply = (redisReply*)redisCommand(redisCtx, "LLEN %s", keyName.toRawUTF8());
+                            if (lenReply && lenReply->type == REDIS_REPLY_INTEGER)
+                            {
+                                if (lenReply->integer > 0)
+                                {
+                                    channels.add(dbPrefix + keyName + " (list, " + String(lenReply->integer) + " items)");
+                                    LOGD("Found list in db", db, ": ", keyName, " with ", lenReply->integer, " items");
+                                }
+                                else
+                                {
+                                    channels.add(dbPrefix + keyName + " (list, empty)");
+                                    LOGD("Found empty list in db", db, ": ", keyName);
+                                }
+                            }
+                            if (lenReply) freeReplyObject(lenReply);
+                        }
+                    }
+                    if (typeReply) freeReplyObject(typeReply);
+                }
+            }
+        }
+
+        freeReplyObject(reply);
+    }
+
+    // Return to database 0 (default)
+    redisReply* selectDefaultReply = (redisReply*)redisCommand(redisCtx, "SELECT 0");
+    if (selectDefaultReply) freeReplyObject(selectDefaultReply);
+
+    // Sort channels alphabetically
+    channels.sort();
+
+    LOGD("Found ", channels.size(), " total available channels/streams across all databases");
+
+#else
+    LOGE("Redis not compiled - REDIS_ENABLED not defined");
+#endif
+
+    return channels;
+}
+
 bool RedisDataThread::startAcquisition()
 {
     LOGD("=== STARTING REDIS ACQUISITION ===");
