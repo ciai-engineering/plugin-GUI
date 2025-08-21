@@ -163,7 +163,7 @@ void RedisConfigurationPanel::createConnectionGroup()
     hostTooltip = std::make_unique<Label>("Host Tooltip", "(IP or hostname)");
     hostTooltip->setBounds(230, yOffset, 100, 20);
     hostTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    hostTooltip->setColour(Label::textColourId, Colour(0x80808080)); // More subtle grey
+    hostTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f)); // Use theme color with transparency
     connectionGroup->addAndMakeVisible(hostTooltip.get());
     
     yOffset += rowHeight;
@@ -184,7 +184,7 @@ void RedisConfigurationPanel::createConnectionGroup()
     portTooltip = std::make_unique<Label>("Port Tooltip", "(1-65535)");
     portTooltip->setBounds(190, yOffset, 80, 20);
     portTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    portTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    portTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     connectionGroup->addAndMakeVisible(portTooltip.get());
     
     yOffset += rowHeight;
@@ -205,7 +205,7 @@ void RedisConfigurationPanel::createConnectionGroup()
     passwordTooltip = std::make_unique<Label>("Password Tooltip", "(leave empty if none)");
     passwordTooltip->setBounds(230, yOffset, 120, 20);
     passwordTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    passwordTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    passwordTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     connectionGroup->addAndMakeVisible(passwordTooltip.get());
 
     yOffset += rowHeight + 10; // Optimized spacing for visual consistency
@@ -243,7 +243,7 @@ void RedisConfigurationPanel::createStreamGroup()
     channelTooltip = std::make_unique<Label>("Channel Tooltip", "(stream identifier)");
     channelTooltip->setBounds(240, yOffset, 120, 20); // Adjusted position
     channelTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    channelTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    channelTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(channelTooltip.get());
     
     yOffset += rowHeight;
@@ -262,7 +262,7 @@ void RedisConfigurationPanel::createStreamGroup()
     streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "(real-time streaming)");
     streamModeTooltip->setBounds(130, yOffset, 160, 20);
     streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    streamModeTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    streamModeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(streamModeTooltip.get());
 
     yOffset += rowHeight;
@@ -281,7 +281,7 @@ void RedisConfigurationPanel::createStreamGroup()
     alwaysLatestTooltip = std::make_unique<Label>("Always Latest Tooltip", "(skip to newest)");
     alwaysLatestTooltip->setBounds(130, yOffset, 160, 20);
     alwaysLatestTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    alwaysLatestTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    alwaysLatestTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
 
     yOffset += rowHeight + 15; // Adjusted spacing to align with other groups' bottom margins
@@ -414,7 +414,7 @@ void RedisConfigurationPanel::createFormatGroup()
     sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "(Hz)");
     sampleRateTooltip->setBounds(190, yOffset, 100, 20);
     sampleRateTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    sampleRateTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    sampleRateTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     formatGroup->addAndMakeVisible(sampleRateTooltip.get());
 
     yOffset += rowHeight;
@@ -435,7 +435,7 @@ void RedisConfigurationPanel::createFormatGroup()
     numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "(1-1024)");
     numChannelsTooltip->setBounds(190, yOffset, 120, 20);
     numChannelsTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    numChannelsTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    numChannelsTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     formatGroup->addAndMakeVisible(numChannelsTooltip.get());
 
     yOffset += rowHeight;
@@ -457,7 +457,7 @@ void RedisConfigurationPanel::createFormatGroup()
     dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
     dataFormatTooltip->setBounds(270, yOffset, 120, 20); // Adjusted position
     dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    dataFormatTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    dataFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     formatGroup->addAndMakeVisible(dataFormatTooltip.get());
 }
 
@@ -487,7 +487,7 @@ void RedisConfigurationPanel::createAdvancedGroup()
     bufferSizeTooltip = std::make_unique<Label>("Buffer Size Tooltip", "(samples)");
     bufferSizeTooltip->setBounds(210, yOffset, 120, 20);
     bufferSizeTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    bufferSizeTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    bufferSizeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     advancedGroup->addAndMakeVisible(bufferSizeTooltip.get());
 
     yOffset += rowHeight + 8; // Add more space to create visual separation
@@ -507,7 +507,7 @@ void RedisConfigurationPanel::createAdvancedGroup()
     openEphysFormatTooltip = std::make_unique<Label>("OpenEphys Format Tooltip", "(native format)");
     openEphysFormatTooltip->setBounds(150, yOffset, 100, 20);
     openEphysFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    openEphysFormatTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    openEphysFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     advancedGroup->addAndMakeVisible(openEphysFormatTooltip.get());
 
     yOffset += rowHeight; // Normal spacing for related items
@@ -526,37 +526,34 @@ void RedisConfigurationPanel::createAdvancedGroup()
     dataValidationTooltip = std::make_unique<Label>("Data Validation Tooltip", "(error checking)");
     dataValidationTooltip->setBounds(150, yOffset, 100, 20);
     dataValidationTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    dataValidationTooltip->setColour(Label::textColourId, Colour(0x80808080));
+    dataValidationTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     advancedGroup->addAndMakeVisible(dataValidationTooltip.get());
 }
 
 void RedisConfigurationPanel::createControlButtons()
 {
-    // Preset selector (Secondary style)
+    // Preset selector (using theme colors)
     presetCombo = std::make_unique<ComboBox>("Preset Combo");
     presetCombo->addListener(this);
-    // Set secondary style for preset combo
-    presetCombo->setColour(ComboBox::backgroundColourId, Colour(0xFFECF0F1)); // Light background
-    presetCombo->setColour(ComboBox::textColourId, Colour(0xFF2C3E50)); // Dark text
-    presetCombo->setColour(ComboBox::outlineColourId, Colour(0xFFBDC3C7)); // Light border
+    // Use theme colors for consistent appearance
+    presetCombo->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    presetCombo->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    presetCombo->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
     addAndMakeVisible(presetCombo.get());
 
-    // Reset button (Danger style)
-    resetButton = std::make_unique<CustomStyledButton>("Reset");
+    // Reset button (using standard UtilityButton with theme colors)
+    resetButton = std::make_unique<UtilityButton>("Reset");
     resetButton->addListener(this);
-    resetButton->setCustomColours(Colour(0xFFE74C3C), Colours::white, Colour(0xFFC0392B)); // Red background, white text, darker red when pressed
     addAndMakeVisible(resetButton.get());
 
-    // Save preset button (Primary style)
-    savePresetButton = std::make_unique<CustomStyledButton>("Save Preset");
+    // Save preset button (using standard UtilityButton with theme colors)
+    savePresetButton = std::make_unique<UtilityButton>("Save Preset");
     savePresetButton->addListener(this);
-    savePresetButton->setCustomColours(Colour(0xFF3498DB), Colours::white, Colour(0xFF2980B9)); // Blue background, white text, darker blue when pressed
     addAndMakeVisible(savePresetButton.get());
 
-    // Help button (Tertiary style - subtle)
-    helpButton = std::make_unique<CustomStyledButton>("Help");
+    // Help button (using standard UtilityButton with theme colors)
+    helpButton = std::make_unique<UtilityButton>("Help");
     helpButton->addListener(this);
-    helpButton->setCustomColours(Colour(0xFFBDC3C7), Colour(0xFF2C3E50), Colour(0xFF95A5A6)); // Light gray background, dark text, slightly darker when pressed
     addAndMakeVisible(helpButton.get());
 
     // Status indicators

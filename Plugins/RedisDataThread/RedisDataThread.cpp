@@ -71,6 +71,9 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
 #else
     LOGE("❌ Redis support is DISABLED - recompile with REDIS_ENABLED=1");
 #endif
+
+    // Note: Parameters removed for compact UI design
+    // All configuration is now handled through the configuration popup
 }
 
 RedisDataThread::~RedisDataThread()
@@ -87,6 +90,8 @@ std::unique_ptr<GenericEditor> RedisDataThread::createEditor(SourceNode* sn)
     std::unique_ptr<RedisDataThreadEditor> editor = std::make_unique<RedisDataThreadEditor>(sn, this);
     return std::move(editor);
 }
+
+
 
 bool RedisDataThread::foundInputSource()
 {

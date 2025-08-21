@@ -81,28 +81,6 @@ public:
 private:
     RedisDataThread* dataThread;
 
-    // Connection settings
-    std::unique_ptr<Label> hostLabel;
-    std::unique_ptr<TextEditor> hostEditor;
-    std::unique_ptr<Label> portLabel;
-    std::unique_ptr<TextEditor> portEditor;
-    std::unique_ptr<Label> passwordLabel;
-    std::unique_ptr<TextEditor> passwordEditor;
-    std::unique_ptr<Label> channelLabel;
-    std::unique_ptr<TextEditor> channelEditor;
-
-    // Data settings
-    std::unique_ptr<Label> sampleRateLabel;
-    std::unique_ptr<TextEditor> sampleRateEditor;
-    std::unique_ptr<Label> numChannelsLabel;
-    std::unique_ptr<TextEditor> numChannelsEditor;
-    std::unique_ptr<Label> dataFormatLabel;
-    std::unique_ptr<ComboBox> dataFormatCombo;
-
-    // Stream settings
-    std::unique_ptr<Label> streamModeLabel;
-    std::unique_ptr<ToggleButton> streamModeButton;
-
     // Control buttons
     std::unique_ptr<UtilityButton> connectButton;
     std::unique_ptr<UtilityButton> configureButton;
@@ -116,9 +94,7 @@ private:
     RedisConfigurationPopup* currentConfigPopup;
 
     // Helper methods
-    void createConnectionControls();
-    void createDataControls();
-    void createStatusControls();
+    void createCompactInterface();
     void updateConnectionStatus();
     void applySettings();
     bool validateSettings();

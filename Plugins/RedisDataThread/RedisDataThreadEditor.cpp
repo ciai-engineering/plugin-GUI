@@ -35,8 +35,8 @@ RedisDataThreadEditor::RedisDataThreadEditor(GenericProcessor* parentNode, Redis
 {
     desiredWidth = 250;
 
-    // Create compact interface with just essential controls
-    createStatusControls();
+    // Create compact UI similar to File Reader (no parameter editors in main view)
+    createCompactInterface();
 
     updateSettings();
 
@@ -49,123 +49,19 @@ RedisDataThreadEditor::~RedisDataThreadEditor()
     stopTimer();
 }
 
-void RedisDataThreadEditor::createConnectionControls()
+
+
+void RedisDataThreadEditor::createCompactInterface()
 {
-    // Host
-    hostLabel = std::make_unique<Label>("Host Label", "Host:");
-    hostLabel->setBounds(10, 30, 50, 20);
-    hostLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(hostLabel.get());
+    // Create a compact interface similar to File Reader
+    // Use standard Open Ephys layout: x=24, y starting at 29, spacing=25
 
-    hostEditor = std::make_unique<TextEditor>("Host Editor");
-    hostEditor->setBounds(65, 30, 100, 20);
-    hostEditor->setText(dataThread->getRedisHost());
-    hostEditor->addListener(this);
-    addAndMakeVisible(hostEditor.get());
-
-    // Port
-    portLabel = std::make_unique<Label>("Port Label", "Port:");
-    portLabel->setBounds(175, 30, 35, 20);
-    portLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(portLabel.get());
-
-    portEditor = std::make_unique<TextEditor>("Port Editor");
-    portEditor->setBounds(215, 30, 60, 20);
-    portEditor->setText(String(dataThread->getRedisPort()));
-    portEditor->addListener(this);
-    addAndMakeVisible(portEditor.get());
-
-    // Password
-    passwordLabel = std::make_unique<Label>("Password Label", "Password:");
-    passwordLabel->setBounds(10, 55, 70, 20);
-    passwordLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(passwordLabel.get());
-
-    passwordEditor = std::make_unique<TextEditor>("Password Editor");
-    passwordEditor->setBounds(85, 55, 120, 20);
-    passwordEditor->setPasswordCharacter('*');
-    passwordEditor->addListener(this);
-    addAndMakeVisible(passwordEditor.get());
-
-    // Channel
-    channelLabel = std::make_unique<Label>("Channel Label", "Channel:");
-    channelLabel->setBounds(10, 80, 60, 20);
-    channelLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(channelLabel.get());
-
-    channelEditor = std::make_unique<TextEditor>("Channel Editor");
-    channelEditor->setBounds(75, 80, 130, 20);
-    channelEditor->setText(dataThread->getRedisChannelName());  // Updated method name
-    channelEditor->addListener(this);
-    addAndMakeVisible(channelEditor.get());
-}
-
-void RedisDataThreadEditor::createDataControls()
-{
-    // Sample Rate
-    sampleRateLabel = std::make_unique<Label>("Sample Rate Label", "Sample Rate:");
-    sampleRateLabel->setBounds(10, 110, 80, 20);
-    sampleRateLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(sampleRateLabel.get());
-
-    sampleRateEditor = std::make_unique<TextEditor>("Sample Rate Editor");
-    sampleRateEditor->setBounds(95, 110, 70, 20);
-    sampleRateEditor->setText(String(dataThread->getSampleRate()));
-    sampleRateEditor->addListener(this);
-    addAndMakeVisible(sampleRateEditor.get());
-
-    // Number of Channels
-    numChannelsLabel = std::make_unique<Label>("Num Channels Label", "Channels:");
-    numChannelsLabel->setBounds(175, 110, 60, 20);
-    numChannelsLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(numChannelsLabel.get());
-
-    numChannelsEditor = std::make_unique<TextEditor>("Num Channels Editor");
-    numChannelsEditor->setBounds(240, 110, 50, 20);
-    numChannelsEditor->setText(String(dataThread->getNumDataChannels()));  // Updated method name
-    numChannelsEditor->addListener(this);
-    addAndMakeVisible(numChannelsEditor.get());
-
-    // Data Format
-    dataFormatLabel = std::make_unique<Label>("Data Format Label", "Format:");
-    dataFormatLabel->setBounds(10, 135, 50, 20);
-    dataFormatLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(dataFormatLabel.get());
-
-    dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
-    dataFormatCombo->setBounds(65, 135, 80, 20);
-    dataFormatCombo->addItem("JSON", 1);
-    dataFormatCombo->addItem("Binary", 2);
-    dataFormatCombo->addItem("BRANDBCI", 3);
-    dataFormatCombo->setSelectedItemIndex(dataThread->getDataFormat() == "json" ? 0 :
-                                         dataThread->getDataFormat() == "binary" ? 1 : 2);
-    dataFormatCombo->addListener(this);
-    addAndMakeVisible(dataFormatCombo.get());
-
-    // Stream Mode Toggle
-    streamModeLabel = std::make_unique<Label>("Stream Mode Label", "Stream Mode:");
-    streamModeLabel->setBounds(155, 135, 80, 20);
-    streamModeLabel->setFont(Font("Small Text", 12, Font::plain));
-    addAndMakeVisible(streamModeLabel.get());
-
-    streamModeButton = std::make_unique<ToggleButton>("Stream Mode");
-    streamModeButton->setBounds(240, 135, 50, 20);
-    streamModeButton->setToggleState(dataThread->getStreamMode(), dontSendNotification);
-    streamModeButton->addListener(this);
-    addAndMakeVisible(streamModeButton.get());
-
-
-}
-
-void RedisDataThreadEditor::createStatusControls()
-{
-    // Use standard Open Ephys layout positioning (x=24, y starting at 29)
     int xPos = 24;
     int yPos = 29;
     int buttonHeight = 20;
     int spacing = 25;
 
-    // Connection info display (similar to File Source's file path display)
+    // Connection info display (similar to File Reader's file path display)
     connectionInfoLabel = std::make_unique<Label>("Connection Info", "Redis: Not configured");
     connectionInfoLabel->setBounds(xPos, yPos, desiredWidth - 30, buttonHeight);
     connectionInfoLabel->setFont(FontOptions("Inter", "Regular", 12));
@@ -206,6 +102,8 @@ void RedisDataThreadEditor::createStatusControls()
     addAndMakeVisible(statusValueLabel.get());
 }
 
+
+
 void RedisDataThreadEditor::paint(Graphics& g)
 {
     // Use standard GenericEditor paint method for consistent styling
@@ -216,7 +114,7 @@ void RedisDataThreadEditor::resized()
 {
     GenericEditor::resized();
 
-    // Reposition components using standard layout patterns
+    // Reposition compact interface components
     if (!getCollapsedState())
     {
         int xPos = 24;
@@ -249,25 +147,22 @@ void RedisDataThreadEditor::resized()
 
 void RedisDataThreadEditor::textEditorTextChanged(TextEditor& editor)
 {
-    // Real-time validation could be added here
+    // No longer needed - using parameter system
 }
 
 void RedisDataThreadEditor::textEditorReturnKeyPressed(TextEditor& editor)
 {
-    applySettings();
+    // No longer needed - using parameter system
 }
 
 void RedisDataThreadEditor::textEditorFocusLost(TextEditor& editor)
 {
-    applySettings();
+    // No longer needed - using parameter system
 }
 
 void RedisDataThreadEditor::comboBoxChanged(ComboBox* comboBox)
 {
-    if (comboBox == dataFormatCombo.get())
-    {
-        applySettings();
-    }
+    // No longer needed - using parameter system
 }
 
 void RedisDataThreadEditor::buttonClicked(Button* button)
@@ -278,10 +173,7 @@ void RedisDataThreadEditor::buttonClicked(Button* button)
         CoreServices::getPopupManager()->showPopup(std::unique_ptr<PopupComponent>(currentConfigPopup), button);
         currentConfigPopup->addComponentListener(this);
     }
-    else if (button == streamModeButton.get())
-    {
-        applySettings();
-    }
+
     else if (button == connectButton.get())
     {
         if (connectButton->getToggleState())
@@ -343,11 +235,11 @@ void RedisDataThreadEditor::updateConnectionStatus()
 
 void RedisDataThreadEditor::updateSettings()
 {
-    // Update connection info display
+    // Update connection info display using dataThread values (more reliable)
     String connectionInfo = "Redis: " + dataThread->getRedisHost() + ":" + String(dataThread->getRedisPort());
-    if (!dataThread->getRedisChannelName().isEmpty())  // Updated method name
+    if (!dataThread->getRedisChannelName().isEmpty())
     {
-        connectionInfo += " (" + dataThread->getRedisChannelName() + ")";  // Updated method name
+        connectionInfo += " (" + dataThread->getRedisChannelName() + ")";
     }
     connectionInfoLabel->setText(connectionInfo, dontSendNotification);
 
@@ -357,13 +249,10 @@ void RedisDataThreadEditor::updateSettings()
 
 void RedisDataThreadEditor::applySettings()
 {
-    // In compact mode, settings are applied through the configuration dialog
-    // This method is called when connecting, so we just validate current settings
+    // Settings are now managed through the parameter system
+    // Parameter changes automatically trigger parameterValueChanged in the DataThread
     if (!validateSettings())
         return;
-
-    // Settings are already stored in the dataThread object
-    // No need to read from editors since they don't exist in compact mode
 }
 
 bool RedisDataThreadEditor::validateSettings()
