@@ -356,7 +356,7 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     else if (button == resetButton.get())
     {
         // Reset to default values
-        loadPreset("Default");
+        loadPreset("Default (32ch, 30kHz)");
     }
     else if (button == savePresetButton.get())
     {
