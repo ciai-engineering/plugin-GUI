@@ -28,6 +28,7 @@
 #include "CustomTooltipComponent.h"
 
 class RedisDataThread;
+class RedisSavePresetPopup;
 
 // Custom button class that supports custom colors
 class CustomStyledButton : public Button

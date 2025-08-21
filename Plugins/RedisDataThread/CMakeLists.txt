@@ -30,6 +30,7 @@ add_sources(${PLUGIN_NAME} RedisDataThread.cpp RedisDataThread.h
             RedisDataDisplayPopup.cpp RedisDataDisplayPopup.h
             RedisConnectionTestPopup.cpp RedisConnectionTestPopup.h
             RedisHelpPopup.cpp RedisHelpPopup.h
+            RedisSavePresetPopup.cpp RedisSavePresetPopup.h
             RedisConfigurationPanel.cpp RedisConfigurationPanel.h
             RedisConfigurationPopup.cpp RedisConfigurationPopup.h
             CustomTooltipComponent.cpp CustomTooltipComponent.h)

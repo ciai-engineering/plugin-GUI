@@ -26,6 +26,7 @@
 #include "RedisDataDisplayPopup.h"
 #include "RedisConnectionTestPopup.h"
 #include "RedisHelpPopup.h"
+#include "RedisSavePresetPopup.h"
 #include <CoreServicesHeader.h>
 
 RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
@@ -360,23 +361,11 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     }
     else if (button == savePresetButton.get())
     {
-        // Show dialog to get preset name
-        AlertWindow alertWindow("Save Preset", "Enter a name for this preset:", AlertWindow::QuestionIcon);
-        alertWindow.addTextEditor("presetName", "My Preset", "Preset name:");
-        alertWindow.addButton("Save", 1, KeyPress(KeyPress::returnKey));
-        alertWindow.addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
+        // Create and show save preset popup
+        auto popup = std::make_unique<RedisSavePresetPopup>(this);
 
-        if (alertWindow.runModalLoop() == 1)
-        {
-            String presetName = alertWindow.getTextEditorContents("presetName").trim();
-            if (presetName.isNotEmpty())
-            {
-                savePreset(presetName);
-                AlertWindow::showMessageBox(AlertWindow::InfoIcon,
-                                           "Preset Saved",
-                                           "Preset '" + presetName + "' has been saved successfully.");
-            }
-        }
+        // Show popup using the PopupManager
+        CoreServices::getPopupManager()->showPopup(std::move(popup), savePresetButton.get());
     }
     else if (button == helpButton.get())
     {
