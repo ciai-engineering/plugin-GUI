@@ -113,7 +113,6 @@ private:
     // Group components
     std::unique_ptr<GroupComponent> connectionGroup;
     std::unique_ptr<GroupComponent> streamGroup;
-    std::unique_ptr<GroupComponent> formatGroup;
     std::unique_ptr<GroupComponent> advancedGroup;
     
     // Connection settings
@@ -199,7 +198,6 @@ private:
     // Helper methods
     void createConnectionGroup();
     void createStreamGroup();
-    void createFormatGroup();
     void createAdvancedGroup();
     void createControlButtons();
     void setupTooltips();

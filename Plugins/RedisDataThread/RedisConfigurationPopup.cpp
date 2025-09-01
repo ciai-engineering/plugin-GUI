@@ -32,9 +32,11 @@ RedisConfigurationPopup::RedisConfigurationPopup(Component* parent, RedisDataThr
     configPanel = std::make_unique<RedisConfigurationPanel>(dataThread);
     addAndMakeVisible(configPanel.get());
 
-    // Set the size to match the configuration panel
-    setSize(420, 680);
-    configPanel->setBounds(0, 0, 420, 680);
+    // Set the size to match the configuration panel's calculated size
+    int panelWidth = 420;
+    int panelHeight = 810; // Reduced by 60px due to streamGroup height reduction (870-60=810)
+    setSize(panelWidth, panelHeight);
+    configPanel->setBounds(0, 0, panelWidth, panelHeight);
 }
 
 RedisConfigurationPopup::~RedisConfigurationPopup()

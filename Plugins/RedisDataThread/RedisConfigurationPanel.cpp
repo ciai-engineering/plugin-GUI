@@ -36,7 +36,6 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Create all UI groups
     createConnectionGroup();
     createStreamGroup();
-    createFormatGroup();
     createAdvancedGroup();
     createControlButtons();
     setupTooltips();
@@ -48,8 +47,9 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Start timer for status updates
     startTimer(2000); // Update every 2 seconds
 
-    // Set initial size - optimized height for better spacing
-    setSize(420, 660);
+    // Calculate required height: title(35) + connection(150) + spacing(15) + stream(380) + spacing(15) + advanced(120) + spacing(15) + controls(120) + margin(20)
+    int requiredHeight = 35 + 150 + 15 + 380 + 15 + 120 + 15 + 120 + 20;
+    setSize(420, requiredHeight); // Total: 870px
 }
 
 RedisConfigurationPanel::~RedisConfigurationPanel()
@@ -72,9 +72,9 @@ void RedisConfigurationPanel::resized()
 {
     int yPos = 35;
     int connectionGroupHeight = 150; // Increased to accommodate Test button
-    int streamGroupHeight = 155;     // Increased height to accommodate View Data button
-    int formatGroupHeight = 120;     // Keep original height
-    int advancedGroupHeight = 120;   // Keep original height
+    int streamGroupHeight = 320;     // Reduced to match button-to-border spacing with Connection Settings
+    int advancedGroupHeight = 120;   // Standard height for Advanced Settings
+    int controlButtonsHeight = 120;  // Space needed for control buttons and status
     int margin = 10;
     int groupSpacing = 15;
 
@@ -85,18 +85,11 @@ void RedisConfigurationPanel::resized()
         yPos += connectionGroupHeight + groupSpacing;
     }
 
-    // Stream group
+    // Stream & Format group (merged)
     if (streamGroup)
     {
         streamGroup->setBounds(margin, yPos, getWidth() - 2 * margin, streamGroupHeight);
         yPos += streamGroupHeight + groupSpacing;
-    }
-    
-    // Format group
-    if (formatGroup)
-    {
-        formatGroup->setBounds(margin, yPos, getWidth() - 2 * margin, formatGroupHeight);
-        yPos += formatGroupHeight + groupSpacing;
     }
 
     // Advanced group
@@ -105,7 +98,10 @@ void RedisConfigurationPanel::resized()
         advancedGroup->setBounds(margin, yPos, getWidth() - 2 * margin, advancedGroupHeight);
         yPos += advancedGroupHeight + groupSpacing;
     }
-    
+
+    // Add extra spacing before control buttons to ensure they're visible
+    yPos += 10;
+
     // Control buttons - redesigned with proper visual hierarchy and grouping
     // Help button (tertiary) - positioned on the left as utility
     if (helpButton)
@@ -235,7 +231,7 @@ void RedisConfigurationPanel::createConnectionGroup()
 
 void RedisConfigurationPanel::createStreamGroup()
 {
-    streamGroup = std::make_unique<GroupComponent>("Stream", "Data Stream Settings");
+    streamGroup = std::make_unique<GroupComponent>("Stream", "Data Stream & Format Settings");
     addAndMakeVisible(streamGroup.get());
 
     int yOffset = 28; // Consistent with other groups
@@ -274,42 +270,30 @@ void RedisConfigurationPanel::createStreamGroup()
     streamGroup->addAndMakeVisible(channelTooltip.get());
     
     yOffset += rowHeight;
-    
-    // Stream Mode
-    streamModeLabel = std::make_unique<Label>("Stream Mode Label", "Stream Mode:");
-    streamModeLabel->setBounds(15, yOffset, labelWidth, 20);
-    streamModeLabel->setFont(FontOptions("Inter", "Regular", 12));
-    streamGroup->addAndMakeVisible(streamModeLabel.get());
-    
-    streamModeButton = std::make_unique<ToggleButton>("Stream Mode");
-    streamModeButton->setBounds(100, yOffset, 20, 20);
-    streamModeButton->addListener(this);
-    streamGroup->addAndMakeVisible(streamModeButton.get());
-    
-    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "(real-time streaming)");
-    streamModeTooltip->setBounds(130, yOffset, 160, 20);
-    streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    streamModeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    streamGroup->addAndMakeVisible(streamModeTooltip.get());
 
-    yOffset += rowHeight;
+    // Data Format (moved from Format group)
+    dataFormatLabel = std::make_unique<Label>("Data Format Label", "Format:");
+    dataFormatLabel->setBounds(15, yOffset, labelWidth, 20);
+    dataFormatLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(dataFormatLabel.get());
 
-    // Always Read Latest Mode
-    alwaysLatestLabel = std::make_unique<Label>("Always Latest Label", "Always Latest:");
-    alwaysLatestLabel->setBounds(15, yOffset, labelWidth, 20);
-    alwaysLatestLabel->setFont(FontOptions("Inter", "Regular", 12));
-    streamGroup->addAndMakeVisible(alwaysLatestLabel.get());
+    dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
+    dataFormatCombo->setBounds(100, yOffset, 180, 20);
+    dataFormatCombo->addItem("BRANDBCI (recommended)", 1);
+    dataFormatCombo->addItem("JSON (general)", 2);
+    dataFormatCombo->addItem("Binary (performance)", 3);
+    dataFormatCombo->addListener(this);
+    dataFormatCombo->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    dataFormatCombo->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    dataFormatCombo->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
+    dataFormatCombo->setColour(ComboBox::focusedOutlineColourId, findColour(ThemeColours::outline));
+    streamGroup->addAndMakeVisible(dataFormatCombo.get());
 
-    alwaysLatestButton = std::make_unique<ToggleButton>("Always Latest");
-    alwaysLatestButton->setBounds(100, yOffset, 20, 20);
-    alwaysLatestButton->addListener(this);
-    streamGroup->addAndMakeVisible(alwaysLatestButton.get());
-
-    alwaysLatestTooltip = std::make_unique<Label>("Always Latest Tooltip", "(skip to newest)");
-    alwaysLatestTooltip->setBounds(130, yOffset, 160, 20);
-    alwaysLatestTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    alwaysLatestTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
+    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
+    dataFormatTooltip->setBounds(290, yOffset, 120, 20);
+    dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    dataFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(dataFormatTooltip.get());
 
     yOffset += rowHeight;
 
@@ -382,11 +366,99 @@ void RedisConfigurationPanel::createStreamGroup()
     fieldPreviewText->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.8f));
     streamGroup->addAndMakeVisible(fieldPreviewText.get());
 
-    yOffset += rowHeight + 15; // Adjusted spacing to align with other groups' bottom margins
+    yOffset += rowHeight;
 
-    // Data button - significantly increased width to show full text
+    // Sample Rate (moved from Format group)
+    sampleRateLabel = std::make_unique<Label>("Sample Rate Label", "Sample Rate:");
+    sampleRateLabel->setBounds(15, yOffset, labelWidth, 20);
+    sampleRateLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(sampleRateLabel.get());
+
+    sampleRateEditor = std::make_unique<TextEditor>("Sample Rate Editor");
+    sampleRateEditor->setBounds(100, yOffset, 80, 20);
+    sampleRateEditor->setTextToShowWhenEmpty("30000", Colours::grey);
+    sampleRateEditor->setInputRestrictions(0, "0123456789.");
+    sampleRateEditor->addListener(this);
+    sampleRateEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    sampleRateEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    sampleRateEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    sampleRateEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
+    streamGroup->addAndMakeVisible(sampleRateEditor.get());
+
+    sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "(Hz)");
+    sampleRateTooltip->setBounds(190, yOffset, 100, 20);
+    sampleRateTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    sampleRateTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(sampleRateTooltip.get());
+
+    yOffset += rowHeight;
+
+    // Number of Channels (moved from Format group)
+    numChannelsLabel = std::make_unique<Label>("Num Channels Label", "Channels:");
+    numChannelsLabel->setBounds(15, yOffset, labelWidth, 20);
+    numChannelsLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(numChannelsLabel.get());
+
+    numChannelsEditor = std::make_unique<TextEditor>("Num Channels Editor");
+    numChannelsEditor->setBounds(100, yOffset, 80, 20);
+    numChannelsEditor->setTextToShowWhenEmpty("32", Colours::grey);
+    numChannelsEditor->setInputRestrictions(4, "0123456789");
+    numChannelsEditor->addListener(this);
+    numChannelsEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    numChannelsEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
+    numChannelsEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
+    numChannelsEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
+    streamGroup->addAndMakeVisible(numChannelsEditor.get());
+
+    numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "(1-1024)");
+    numChannelsTooltip->setBounds(190, yOffset, 120, 20);
+    numChannelsTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    numChannelsTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(numChannelsTooltip.get());
+
+    yOffset += rowHeight;
+
+    // Stream Mode
+    streamModeLabel = std::make_unique<Label>("Stream Mode Label", "Stream Mode:");
+    streamModeLabel->setBounds(15, yOffset, labelWidth, 20);
+    streamModeLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(streamModeLabel.get());
+
+    streamModeButton = std::make_unique<ToggleButton>("Stream Mode");
+    streamModeButton->setBounds(100, yOffset, 20, 20);
+    streamModeButton->addListener(this);
+    streamGroup->addAndMakeVisible(streamModeButton.get());
+
+    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "(real-time streaming)");
+    streamModeTooltip->setBounds(130, yOffset, 160, 20);
+    streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    streamModeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(streamModeTooltip.get());
+
+    yOffset += rowHeight;
+
+    // Always Read Latest Mode
+    alwaysLatestLabel = std::make_unique<Label>("Always Latest Label", "Always Latest:");
+    alwaysLatestLabel->setBounds(15, yOffset, labelWidth, 20);
+    alwaysLatestLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(alwaysLatestLabel.get());
+
+    alwaysLatestButton = std::make_unique<ToggleButton>("Always Latest");
+    alwaysLatestButton->setBounds(100, yOffset, 20, 20);
+    alwaysLatestButton->addListener(this);
+    streamGroup->addAndMakeVisible(alwaysLatestButton.get());
+
+    alwaysLatestTooltip = std::make_unique<Label>("Always Latest Tooltip", "(skip to newest)");
+    alwaysLatestTooltip->setBounds(130, yOffset, 160, 20);
+    alwaysLatestTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    alwaysLatestTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
+
+    yOffset += rowHeight + 10; // Consistent spacing with Connection Settings group
+
+    // Data button - consistent with Test Connection button styling
     dataButton = std::make_unique<UtilityButton>("View Data");
-    dataButton->setBounds(15, yOffset, 160, 25); // Increased to 160px to ensure full text visibility
+    dataButton->setBounds(15, yOffset, 140, 25); // Consistent width with Test Connection button
     dataButton->addListener(this);
     streamGroup->addAndMakeVisible(dataButton.get());
 }
@@ -514,94 +586,7 @@ void RedisConfigurationPanel::timerCallback()
     updateValidationStatus();
 }
 
-void RedisConfigurationPanel::createFormatGroup()
-{
-    formatGroup = std::make_unique<GroupComponent>("Format", "Data Format Settings");
-    addAndMakeVisible(formatGroup.get());
-
-    int yOffset = 28; // Consistent with other groups
-    int rowHeight = 26; // Consistent spacing
-    int labelWidth = 80;
-    int editorWidth = 120;
-    int tooltipWidth = 150;
-
-    // Sample Rate
-    sampleRateLabel = std::make_unique<Label>("Sample Rate Label", "Sample Rate:");
-    sampleRateLabel->setBounds(15, yOffset, labelWidth, 20);
-    sampleRateLabel->setFont(FontOptions("Inter", "Regular", 12));
-    formatGroup->addAndMakeVisible(sampleRateLabel.get());
-
-    sampleRateEditor = std::make_unique<TextEditor>("Sample Rate Editor");
-    sampleRateEditor->setBounds(100, yOffset, 80, 20);
-    sampleRateEditor->setTextToShowWhenEmpty("30000", Colours::grey);
-    sampleRateEditor->setInputRestrictions(0, "0123456789.");
-    sampleRateEditor->addListener(this);
-    // Apply consistent theme colors for unified appearance
-    sampleRateEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
-    sampleRateEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
-    sampleRateEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
-    sampleRateEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
-    formatGroup->addAndMakeVisible(sampleRateEditor.get());
-
-    sampleRateTooltip = std::make_unique<Label>("Sample Rate Tooltip", "(Hz)");
-    sampleRateTooltip->setBounds(190, yOffset, 100, 20);
-    sampleRateTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    sampleRateTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    formatGroup->addAndMakeVisible(sampleRateTooltip.get());
-
-    yOffset += rowHeight;
-
-    // Number of Channels
-    numChannelsLabel = std::make_unique<Label>("Num Channels Label", "Channels:");
-    numChannelsLabel->setBounds(15, yOffset, labelWidth, 20);
-    numChannelsLabel->setFont(FontOptions("Inter", "Regular", 12));
-    formatGroup->addAndMakeVisible(numChannelsLabel.get());
-
-    numChannelsEditor = std::make_unique<TextEditor>("Num Channels Editor");
-    numChannelsEditor->setBounds(100, yOffset, 80, 20);
-    numChannelsEditor->setTextToShowWhenEmpty("32", Colours::grey);
-    numChannelsEditor->setInputRestrictions(4, "0123456789");
-    numChannelsEditor->addListener(this);
-    // Apply consistent theme colors for unified appearance
-    numChannelsEditor->setColour(TextEditor::backgroundColourId, findColour(ThemeColours::widgetBackground));
-    numChannelsEditor->setColour(TextEditor::textColourId, findColour(ThemeColours::defaultText));
-    numChannelsEditor->setColour(TextEditor::outlineColourId, findColour(ThemeColours::outline));
-    numChannelsEditor->setColour(TextEditor::focusedOutlineColourId, findColour(ThemeColours::defaultText));
-    formatGroup->addAndMakeVisible(numChannelsEditor.get());
-
-    numChannelsTooltip = std::make_unique<Label>("Num Channels Tooltip", "(1-1024)");
-    numChannelsTooltip->setBounds(190, yOffset, 120, 20);
-    numChannelsTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    numChannelsTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    formatGroup->addAndMakeVisible(numChannelsTooltip.get());
-
-    yOffset += rowHeight;
-
-    // Data Format
-    dataFormatLabel = std::make_unique<Label>("Data Format Label", "Format:");
-    dataFormatLabel->setBounds(15, yOffset, labelWidth, 20);
-    dataFormatLabel->setFont(FontOptions("Inter", "Regular", 12));
-    formatGroup->addAndMakeVisible(dataFormatLabel.get());
-
-    dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
-    dataFormatCombo->setBounds(100, yOffset, 180, 20); // Increased width to prevent text distortion
-    dataFormatCombo->addItem("BRANDBCI (recommended)", 1);
-    dataFormatCombo->addItem("JSON (general)", 2);
-    dataFormatCombo->addItem("Binary (performance)", 3);
-    dataFormatCombo->addListener(this);
-    // Apply consistent theme colors for unified appearance
-    dataFormatCombo->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
-    dataFormatCombo->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
-    dataFormatCombo->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
-    dataFormatCombo->setColour(ComboBox::focusedOutlineColourId, findColour(ThemeColours::outline));
-    formatGroup->addAndMakeVisible(dataFormatCombo.get());
-
-    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
-    dataFormatTooltip->setBounds(290, yOffset, 120, 20); // Adjusted position for wider ComboBox
-    dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    dataFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    formatGroup->addAndMakeVisible(dataFormatTooltip.get());
-}
+// createFormatGroup method removed - all format settings moved to createStreamGroup
 
 void RedisConfigurationPanel::createAdvancedGroup()
 {

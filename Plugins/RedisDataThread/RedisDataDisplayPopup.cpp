@@ -40,7 +40,7 @@ void RedisDataDisplayPopup::setupUI()
     // Title label
     titleLabel = std::make_unique<Label>("Title Label", "Latest Redis Data Records");
     titleLabel->setBounds(10, 10, getWidth() - 20, 25);
-    titleLabel->setFont(Font("Small Text", 16, Font::bold));
+    titleLabel->setFont(FontOptions("Small Text", "Bold", 16));
     titleLabel->setJustificationType(Justification::centred);
     addAndMakeVisible(titleLabel.get());
 
@@ -50,7 +50,7 @@ void RedisDataDisplayPopup::setupUI()
     dataTextEditor->setMultiLine(true);
     dataTextEditor->setReadOnly(true);
     dataTextEditor->setScrollbarsShown(true);
-    dataTextEditor->setFont(Font("Courier New", 12, Font::plain));
+    dataTextEditor->setFont(FontOptions("Courier New", "Regular", 12));
     dataTextEditor->setText(formatDataForDisplay());
     addAndMakeVisible(dataTextEditor.get());
 }
@@ -100,6 +100,10 @@ String RedisDataDisplayPopup::formatDataForDisplay()
         else if (format == "binary")
         {
             displayText += formatBinaryRecord(dataRecords[i], i + 1);
+        }
+        else if (format == "brandbci")
+        {
+            displayText += formatBrandBCIRecord(dataRecords[i], i + 1);
         }
         else
         {
@@ -202,6 +206,106 @@ String RedisDataDisplayPopup::formatBinaryRecord(const String& binaryStr, int re
         formatted += "\n";
     }
     
+    formatted += "\n";
+    return formatted;
+}
+
+String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, int recordIndex)
+{
+    String formatted;
+    formatted += "Record " + String(recordIndex) + " (BRANDBCI):\n";
+    formatted += String::repeatedString("-", 30) + "\n";
+
+    // Try to parse as JSON first (BRANDBCI often uses JSON wrapper)
+    var jsonData;
+    Result parseResult = JSON::parse(brandBCIStr, jsonData);
+
+    if (parseResult.wasOk())
+    {
+        // Handle BRANDBCI JSON format
+        if (jsonData.hasProperty("data"))
+        {
+            var data = jsonData["data"];
+            if (data.isArray())
+            {
+                formatted += "Data array (" + String(data.size()) + " channels): [";
+                for (int i = 0; i < data.size(); i++)
+                {
+                    if (i > 0) formatted += ", ";
+                    formatted += String((double)data[i], 3);
+                    if (i >= 5 && data.size() > 8) // Show first 5 and last 2 if many channels
+                    {
+                        formatted += ", ..., ";
+                        formatted += String((double)data[data.size()-2], 3) + ", ";
+                        formatted += String((double)data[data.size()-1], 3);
+                        break;
+                    }
+                }
+                formatted += "]\n";
+            }
+            else
+            {
+                formatted += "Data: " + data.toString() + "\n";
+            }
+        }
+
+        if (jsonData.hasProperty("timestamp"))
+        {
+            formatted += "Timestamp: " + String((int64)jsonData["timestamp"]) + "\n";
+        }
+
+        if (jsonData.hasProperty("sample_rate"))
+        {
+            formatted += "Sample Rate: " + String((double)jsonData["sample_rate"]) + " Hz\n";
+        }
+
+        if (jsonData.hasProperty("channels"))
+        {
+            formatted += "Channel Count: " + String((int)jsonData["channels"]) + "\n";
+        }
+    }
+    else
+    {
+        // If not JSON, treat as raw BRANDBCI data
+        formatted += "Raw BRANDBCI data (" + String(brandBCIStr.length()) + " bytes):\n";
+
+        // Try to interpret as binary float array
+        const char* data = brandBCIStr.toRawUTF8();
+        size_t length = brandBCIStr.length();
+
+        if (length >= sizeof(float) && length % sizeof(float) == 0)
+        {
+            int numFloats = length / sizeof(float);
+            const float* floatData = reinterpret_cast<const float*>(data);
+
+            formatted += "Float values (" + String(numFloats) + "): [";
+            for (int i = 0; i < numFloats; i++)
+            {
+                if (i > 0) formatted += ", ";
+                formatted += String(floatData[i], 3);
+                if (i >= 5 && numFloats > 8) // Show first 5 and last 2 if many values
+                {
+                    formatted += ", ..., ";
+                    formatted += String(floatData[numFloats-2], 3) + ", ";
+                    formatted += String(floatData[numFloats-1], 3);
+                    break;
+                }
+            }
+            formatted += "]\n";
+        }
+        else
+        {
+            // Show as hex if not interpretable as floats
+            formatted += "Hex data: ";
+            for (size_t i = 0; i < jmin(length, (size_t)32); i++)
+            {
+                formatted += String::toHexString((uint8)data[i]).paddedLeft('0', 2) + " ";
+            }
+            if (length > 32) formatted += "...";
+            formatted += "\n";
+        }
+    }
+
     formatted += "\n";
     return formatted;
 }

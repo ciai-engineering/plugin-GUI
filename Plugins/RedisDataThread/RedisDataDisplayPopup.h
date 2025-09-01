@@ -60,6 +60,7 @@ private:
     String formatDataForDisplay();
     String formatJsonRecord(const String& jsonStr, int recordIndex);
     String formatBinaryRecord(const String& binaryStr, int recordIndex);
+    String formatBrandBCIRecord(const String& brandBCIStr, int recordIndex);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisDataDisplayPopup);
 };
