@@ -444,47 +444,111 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
                     redisReply* fieldsReply = entryReply->element[1];
                     if (fieldsReply->type == REDIS_REPLY_ARRAY)
                     {
-                        // Look for the selected data field (or fallback to common field names)
-                        String targetField = selectedDataField.isNotEmpty() ? selectedDataField : "data";
-                        bool foundData = false;
+                        // Check if this is Open Ephys format by looking for specific fields
+                        bool hasOpenEphysFields = false;
+                        String availableFields = "";
 
                         for (size_t j = 0; j < fieldsReply->elements; j += 2)
                         {
-                            if (j + 1 < fieldsReply->elements &&
-                                fieldsReply->element[j]->type == REDIS_REPLY_STRING)
+                            if (j + 1 < fieldsReply->elements)
                             {
                                 String fieldName(fieldsReply->element[j]->str);
+                                availableFields += fieldName + " ";
 
-                                // Check for selected field or common field names
-                                if (fieldName == targetField ||
-                                    fieldName == "brandbci_data" ||
-                                    fieldName == "data")
+                                if (fieldName == "data_shape" || fieldName == "data_dtype" || fieldName == "n_samples")
                                 {
-                                    String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
-                                    records.add(record);
-                                    LOGD("Stream record ", i, " field: ", fieldName, ", length: ", record.length(), " bytes");
-                                    foundData = true;
-                                    break;
+                                    hasOpenEphysFields = true;
                                 }
                             }
                         }
 
-                        // If no data field found, create a JSON representation of all fields
-                        if (!foundData)
+                        LOGD("Stream record ", i, " available fields: ", availableFields);
+                        LOGD("Open Ephys format detected: ", hasOpenEphysFields ? "YES" : "NO");
+
+                        if (hasOpenEphysFields)
                         {
+                            // Create a structured representation of Open Ephys data for display
                             var jsonObj = var(new DynamicObject());
+                            const char* binaryData = nullptr;
+                            size_t binaryDataLength = 0;
+
                             for (size_t j = 0; j < fieldsReply->elements; j += 2)
                             {
                                 if (j + 1 < fieldsReply->elements)
                                 {
                                     String fieldName(fieldsReply->element[j]->str);
-                                    String fieldValue(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
-                                    jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+
+                                    // Handle binary data field specially
+                                    if (fieldName == "data")
+                                    {
+                                        binaryData = fieldsReply->element[j + 1]->str;
+                                        binaryDataLength = fieldsReply->element[j + 1]->len;
+                                        jsonObj.getDynamicObject()->setProperty("data_bytes", (int)binaryDataLength);
+                                    }
+                                    else
+                                    {
+                                        String fieldValue(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                    }
                                 }
                             }
+
+                            // Add the binary data using Base64 to avoid corruption through UTF-8 conversion
+                            if (binaryData && binaryDataLength > 0)
+                            {
+                                MemoryBlock mb(binaryData, binaryDataLength);
+                                String b64 = Base64::toBase64(mb.getData(), mb.getSize());
+                                jsonObj.getDynamicObject()->setProperty("_binary_b64", b64);
+                            }
+
                             String jsonRecord = JSON::toString(jsonObj);
                             records.add(jsonRecord);
-                            LOGD("Stream record ", i, " (all fields as JSON), length: ", jsonRecord.length(), " bytes");
+                            LOGD("Open Ephys record ", i, " added, metadata + ", binaryDataLength, " bytes binary data");
+                        }
+                        else
+                        {
+                            // Look for legacy BRANDBCI or simple data fields
+                            String targetField = selectedDataField.isNotEmpty() ? selectedDataField : "data";
+                            bool foundData = false;
+
+                            for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                            {
+                                if (j + 1 < fieldsReply->elements &&
+                                    fieldsReply->element[j]->type == REDIS_REPLY_STRING)
+                                {
+                                    String fieldName(fieldsReply->element[j]->str);
+
+                                    // Check for selected field or common field names
+                                    if (fieldName == targetField ||
+                                        fieldName == "brandbci_data" ||
+                                        fieldName == "data")
+                                    {
+                                        String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        records.add(record);
+                                        LOGD("Legacy record ", i, " field: ", fieldName, ", length: ", record.length(), " bytes");
+                                        foundData = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If no data field found, create a JSON representation of all fields
+                            if (!foundData)
+                            {
+                                var jsonObj = var(new DynamicObject());
+                                for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                                {
+                                    if (j + 1 < fieldsReply->elements)
+                                    {
+                                        String fieldName(fieldsReply->element[j]->str);
+                                        String fieldValue(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                    }
+                                }
+                                String jsonRecord = JSON::toString(jsonObj);
+                                records.add(jsonRecord);
+                                LOGD("Generic record ", i, " (all fields as JSON), length: ", jsonRecord.length(), " bytes");
+                            }
                         }
                     }
                 }
@@ -2697,5 +2761,4 @@ void RedisDataThread::setArray2DProcessing(Array2DProcessing method)
     }
     LOGD("2D array processing method set to: ", methodName);
 }
-
 
