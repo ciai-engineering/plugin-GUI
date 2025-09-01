@@ -101,6 +101,12 @@ public:
     /** Refresh available channels from Redis */
     void refreshAvailableChannels();
 
+    /** Refresh available data fields from Redis */
+    void refreshAvailableFields();
+
+    /** Update field preview based on selected field */
+    void updateFieldPreview();
+
 private:
     RedisDataThread* dataThread;
     
@@ -137,6 +143,19 @@ private:
     std::unique_ptr<Label> alwaysLatestLabel;
     std::unique_ptr<ToggleButton> alwaysLatestButton;
     std::unique_ptr<Label> alwaysLatestTooltip;
+
+    // Field discovery components
+    std::unique_ptr<Label> dataFieldLabel;
+    std::unique_ptr<ComboBox> dataFieldComboBox;
+    std::unique_ptr<UtilityButton> refreshFieldsButton;
+    std::unique_ptr<Label> dataFieldTooltip;
+
+    std::unique_ptr<Label> array2DProcessingLabel;
+    std::unique_ptr<ComboBox> array2DProcessingComboBox;
+    std::unique_ptr<Label> array2DProcessingTooltip;
+
+    std::unique_ptr<Label> fieldPreviewLabel;
+    std::unique_ptr<Label> fieldPreviewText;
     
     // Format settings
     std::unique_ptr<Label> sampleRateLabel;

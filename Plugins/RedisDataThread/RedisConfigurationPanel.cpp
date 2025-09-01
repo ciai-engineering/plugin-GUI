@@ -311,6 +311,77 @@ void RedisConfigurationPanel::createStreamGroup()
     alwaysLatestTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(alwaysLatestTooltip.get());
 
+    yOffset += rowHeight;
+
+    // Data Field Selection
+    dataFieldLabel = std::make_unique<Label>("Data Field Label", "Data Field:");
+    dataFieldLabel->setBounds(15, yOffset, labelWidth, 20);
+    dataFieldLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(dataFieldLabel.get());
+
+    dataFieldComboBox = std::make_unique<ComboBox>("Data Field ComboBox");
+    dataFieldComboBox->setBounds(100, yOffset, 160, 20);
+    dataFieldComboBox->setEditableText(false);
+    dataFieldComboBox->setTextWhenNothingSelected("data");
+    dataFieldComboBox->addListener(this);
+    dataFieldComboBox->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    dataFieldComboBox->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    dataFieldComboBox->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
+    streamGroup->addAndMakeVisible(dataFieldComboBox.get());
+
+    refreshFieldsButton = std::make_unique<UtilityButton>("R");
+    refreshFieldsButton->setBounds(265, yOffset, 25, 20);
+    refreshFieldsButton->setTooltip("Refresh available data fields from Redis");
+    refreshFieldsButton->addListener(this);
+    streamGroup->addAndMakeVisible(refreshFieldsButton.get());
+
+    dataFieldTooltip = std::make_unique<Label>("Data Field Tooltip", "(field containing array data)");
+    dataFieldTooltip->setBounds(295, yOffset, 120, 20);
+    dataFieldTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    dataFieldTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(dataFieldTooltip.get());
+
+    yOffset += rowHeight;
+
+    // 2D Array Processing
+    array2DProcessingLabel = std::make_unique<Label>("2D Processing Label", "2D Processing:");
+    array2DProcessingLabel->setBounds(15, yOffset, labelWidth, 20);
+    array2DProcessingLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(array2DProcessingLabel.get());
+
+    array2DProcessingComboBox = std::make_unique<ComboBox>("2D Processing ComboBox");
+    array2DProcessingComboBox->setBounds(100, yOffset, 160, 20);
+    array2DProcessingComboBox->addItem("First Row", 1);
+    array2DProcessingComboBox->addItem("Sum", 2);
+    array2DProcessingComboBox->addItem("Mean", 3);
+    array2DProcessingComboBox->setSelectedItemIndex(0);
+    array2DProcessingComboBox->addListener(this);
+    array2DProcessingComboBox->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    array2DProcessingComboBox->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    array2DProcessingComboBox->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
+    array2DProcessingComboBox->setEnabled(false); // Initially disabled
+    streamGroup->addAndMakeVisible(array2DProcessingComboBox.get());
+
+    array2DProcessingTooltip = std::make_unique<Label>("2D Processing Tooltip", "(for 2D arrays only)");
+    array2DProcessingTooltip->setBounds(265, yOffset, 150, 20);
+    array2DProcessingTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    array2DProcessingTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(array2DProcessingTooltip.get());
+
+    yOffset += rowHeight;
+
+    // Field Preview
+    fieldPreviewLabel = std::make_unique<Label>("Field Preview Label", "Field Preview:");
+    fieldPreviewLabel->setBounds(15, yOffset, labelWidth, 20);
+    fieldPreviewLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(fieldPreviewLabel.get());
+
+    fieldPreviewText = std::make_unique<Label>("Field Preview Text", "Select a field to see preview");
+    fieldPreviewText->setBounds(100, yOffset, 315, 20);
+    fieldPreviewText->setFont(FontOptions("Inter", "Regular", 10));
+    fieldPreviewText->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.8f));
+    streamGroup->addAndMakeVisible(fieldPreviewText.get());
+
     yOffset += rowHeight + 15; // Adjusted spacing to align with other groups' bottom margins
 
     // Data button - significantly increased width to show full text
@@ -377,6 +448,15 @@ void RedisConfigurationPanel::comboBoxChanged(ComboBox* comboBox)
             loadPreset(selectedPreset);
         }
     }
+    else if (comboBox == dataFieldComboBox.get())
+    {
+        updateFieldPreview();
+        applyToThread();
+    }
+    else if (comboBox == array2DProcessingComboBox.get())
+    {
+        applyToThread();
+    }
 }
 
 void RedisConfigurationPanel::buttonClicked(Button* button)
@@ -413,6 +493,10 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     else if (button == dataButton.get())
     {
         showLatestData();
+    }
+    else if (button == refreshFieldsButton.get())
+    {
+        refreshAvailableFields();
     }
     else if (button == refreshChannelsButton.get())
     {
@@ -717,6 +801,37 @@ void RedisConfigurationPanel::updateFromThread()
     openEphysFormatButton->setToggleState(dataThread->isOpenEphysFormatEnabled(), dontSendNotification);
     dataValidationButton->setToggleState(dataThread->isDataValidationEnabled(), dontSendNotification);
 
+    // Update field discovery settings
+    String selectedField = dataThread->getSelectedDataField();
+    if (selectedField.isNotEmpty())
+    {
+        // Try to find and select the field in the dropdown
+        for (int i = 0; i < dataFieldComboBox->getNumItems(); i++)
+        {
+            String itemText = dataFieldComboBox->getItemText(i);
+            String fieldName = itemText.upToFirstOccurrenceOf(" (", false, false);
+            if (fieldName == selectedField)
+            {
+                dataFieldComboBox->setSelectedItemIndex(i, dontSendNotification);
+                break;
+            }
+        }
+    }
+
+    // Update 2D processing method
+    RedisDataThread::Array2DProcessing method = dataThread->getArray2DProcessing();
+    int processingIndex = 0;
+    switch (method)
+    {
+        case RedisDataThread::Array2DProcessing::FIRST_ROW: processingIndex = 0; break;
+        case RedisDataThread::Array2DProcessing::SUM: processingIndex = 1; break;
+        case RedisDataThread::Array2DProcessing::MEAN: processingIndex = 2; break;
+    }
+    array2DProcessingComboBox->setSelectedItemIndex(processingIndex, dontSendNotification);
+
+    // Update field preview
+    updateFieldPreview();
+
     // Validate all fields
     updateValidationStatus();
 }
@@ -747,6 +862,26 @@ void RedisConfigurationPanel::applyToThread()
     dataThread->setBufferSize(bufferSizeEditor->getText().getIntValue());
     dataThread->setOpenEphysFormatEnabled(openEphysFormatButton->getToggleState());
     dataThread->setDataValidationEnabled(dataValidationButton->getToggleState());
+
+    // Apply field discovery settings
+    String selectedFieldText = dataFieldComboBox->getText();
+    if (selectedFieldText.isNotEmpty() && selectedFieldText != "No fields found")
+    {
+        // Extract field name from display text (before the first parenthesis)
+        String fieldName = selectedFieldText.upToFirstOccurrenceOf(" (", false, false);
+        dataThread->setSelectedDataField(fieldName);
+    }
+
+    // Apply 2D processing method
+    int processingIndex = array2DProcessingComboBox->getSelectedItemIndex();
+    RedisDataThread::Array2DProcessing method = RedisDataThread::Array2DProcessing::FIRST_ROW;
+    switch (processingIndex)
+    {
+        case 0: method = RedisDataThread::Array2DProcessing::FIRST_ROW; break;
+        case 1: method = RedisDataThread::Array2DProcessing::SUM; break;
+        case 2: method = RedisDataThread::Array2DProcessing::MEAN; break;
+    }
+    dataThread->setArray2DProcessing(method);
 }
 
 bool RedisConfigurationPanel::validateAllSettings()
@@ -1360,4 +1495,160 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
             presetCombo->addItem(presetName, presetCombo->getNumItems() + 1);
         }
     }
+}
+
+void RedisConfigurationPanel::refreshAvailableFields()
+{
+    if (!dataThread->isConnected())
+    {
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Not Connected",
+                                   "Please connect to Redis server first to discover available data fields.");
+        return;
+    }
+
+    // Disable refresh button temporarily
+    refreshFieldsButton->setEnabled(false);
+    refreshFieldsButton->setButtonText("...");
+
+    try
+    {
+        // Get available fields from Redis with error handling
+        Array<RedisDataThread::FieldInfo> fields = dataThread->discoverDataFields();
+
+    // Clear existing items
+    dataFieldComboBox->clear();
+
+    if (fields.isEmpty())
+    {
+        dataFieldComboBox->addItem("No fields found", 1);
+        dataFieldComboBox->setSelectedItemIndex(0);
+        fieldPreviewText->setText("No data fields discovered", dontSendNotification);
+    }
+    else
+    {
+        // Add suitable fields to dropdown
+        int itemId = 1;
+        int defaultSelection = -1;
+
+        for (const auto& field : fields)
+        {
+            if (field.isSuitableForNeural)
+            {
+                dataFieldComboBox->addItem(field.getDisplayName(), itemId);
+
+                // Set default selection to "data" field if available
+                if (field.fieldName == "data" || field.fieldName == dataThread->getSelectedDataField())
+                {
+                    defaultSelection = itemId - 1;
+                }
+                itemId++;
+            }
+        }
+
+        // Add non-suitable fields with indication
+        for (const auto& field : fields)
+        {
+            if (!field.isSuitableForNeural)
+            {
+                dataFieldComboBox->addItem(field.getDisplayName(), itemId);
+                itemId++;
+            }
+        }
+
+        if (defaultSelection >= 0)
+        {
+            dataFieldComboBox->setSelectedItemIndex(defaultSelection);
+        }
+        else if (dataFieldComboBox->getNumItems() > 0)
+        {
+            dataFieldComboBox->setSelectedItemIndex(0);
+        }
+
+        updateFieldPreview();
+    }
+
+        // Re-enable refresh button
+        refreshFieldsButton->setEnabled(true);
+        refreshFieldsButton->setButtonText("R");
+    }
+    catch (const std::exception& e)
+    {
+        // Handle exceptions during field discovery
+        LOGE("Exception during field refresh: ", e.what());
+
+        dataFieldComboBox->clear();
+        dataFieldComboBox->addItem("Error discovering fields", 1);
+        dataFieldComboBox->setSelectedItemIndex(0);
+        fieldPreviewText->setText("Field discovery failed - check connection", dontSendNotification);
+
+        // Re-enable refresh button
+        refreshFieldsButton->setEnabled(true);
+        refreshFieldsButton->setButtonText("R");
+
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Field Discovery Failed",
+                                   "Failed to discover data fields from Redis. Please check your connection and try again.\n\nError: " + String(e.what()));
+    }
+    catch (...)
+    {
+        // Handle unknown exceptions
+        LOGE("Unknown exception during field refresh");
+
+        dataFieldComboBox->clear();
+        dataFieldComboBox->addItem("Error discovering fields", 1);
+        dataFieldComboBox->setSelectedItemIndex(0);
+        fieldPreviewText->setText("Field discovery failed - unknown error", dontSendNotification);
+
+        // Re-enable refresh button
+        refreshFieldsButton->setEnabled(true);
+        refreshFieldsButton->setButtonText("R");
+
+        AlertWindow::showMessageBox(AlertWindow::WarningIcon,
+                                   "Field Discovery Failed",
+                                   "An unexpected error occurred while discovering data fields. Please check your connection and try again.");
+    }
+}
+
+void RedisConfigurationPanel::updateFieldPreview()
+{
+    String selectedText = dataFieldComboBox->getText();
+    if (selectedText.isEmpty() || selectedText == "No fields found")
+    {
+        fieldPreviewText->setText("No field selected", dontSendNotification);
+        array2DProcessingComboBox->setEnabled(false);
+        return;
+    }
+
+    // Extract field name from display text (before the first parenthesis)
+    String fieldName = selectedText.upToFirstOccurrenceOf(" (", false, false);
+
+    // Check if this is a 2D array field
+    bool is2DArray = selectedText.contains("2D array");
+    array2DProcessingComboBox->setEnabled(is2DArray);
+
+    if (is2DArray)
+    {
+        array2DProcessingTooltip->setText("(select processing method)", dontSendNotification);
+    }
+    else
+    {
+        array2DProcessingTooltip->setText("(for 2D arrays only)", dontSendNotification);
+    }
+
+    // Get field info for preview
+    if (dataThread->isConnected())
+    {
+        Array<RedisDataThread::FieldInfo> fields = dataThread->discoverDataFields();
+        for (const auto& field : fields)
+        {
+            if (field.fieldName == fieldName)
+            {
+                fieldPreviewText->setText(field.sampleData, dontSendNotification);
+                return;
+            }
+        }
+    }
+
+    fieldPreviewText->setText("Field: " + fieldName, dontSendNotification);
 }
