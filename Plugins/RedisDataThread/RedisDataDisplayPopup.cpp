@@ -40,7 +40,7 @@ void RedisDataDisplayPopup::setupUI()
     // Title label
     titleLabel = std::make_unique<Label>("Title Label", "Latest Redis Data Records");
     titleLabel->setBounds(10, 10, getWidth() - 20, 25);
-    titleLabel->setFont(Font("Small Text", 16, Font::bold));
+    titleLabel->setFont(FontOptions("Small Text", "Bold", 16));
     titleLabel->setJustificationType(Justification::centred);
     addAndMakeVisible(titleLabel.get());
 
@@ -50,7 +50,7 @@ void RedisDataDisplayPopup::setupUI()
     dataTextEditor->setMultiLine(true);
     dataTextEditor->setReadOnly(true);
     dataTextEditor->setScrollbarsShown(true);
-    dataTextEditor->setFont(Font("Courier New", 12, Font::plain));
+    dataTextEditor->setFont(FontOptions("Courier New", "Regular", 12));
     dataTextEditor->setText(formatDataForDisplay());
     addAndMakeVisible(dataTextEditor.get());
 }
@@ -93,18 +93,63 @@ String RedisDataDisplayPopup::formatDataForDisplay()
 
     for (int i = 0; i < dataRecords.size(); i++)
     {
-        if (format == "json")
+        // Debug: Log the record data for analysis
+        LOGD("Processing record ", i + 1, " (length: ", dataRecords[i].length(), " chars)");
+        LOGD("Record preview: ", dataRecords[i].substring(0, 100), "...");
+
+        // Try to detect if this is an Open Ephys format record (JSON with specific fields)
+        var jsonData;
+        Result parseResult = JSON::parse(dataRecords[i], jsonData);
+
+        if (parseResult.wasOk())
         {
-            displayText += formatJsonRecord(dataRecords[i], i + 1);
-        }
-        else if (format == "binary")
-        {
-            displayText += formatBinaryRecord(dataRecords[i], i + 1);
+            LOGD("JSON parse successful for record ", i + 1);
+            if (jsonData.isObject())
+            {
+                LOGD("Record ", i + 1, " is a JSON object");
+                if (jsonData.hasProperty("data_shape") || jsonData.hasProperty("n_samples") || jsonData.hasProperty("data_dtype"))
+                {
+                    LOGD("Open Ephys format detected for record ", i + 1);
+                    displayText += formatOpenEphysRecord(dataRecords[i], i + 1);
+                }
+                else
+                {
+                    LOGD("JSON object but not Open Ephys format for record ", i + 1);
+                    if (format == "json")
+                    {
+                        displayText += formatJsonRecord(dataRecords[i], i + 1);
+                    }
+                    else
+                    {
+                        displayText += "Record " + String(i + 1) + " (JSON but not Open Ephys):\n";
+                        displayText += dataRecords[i] + "\n\n";
+                    }
+                }
+            }
+            else
+            {
+                LOGD("JSON parse successful but not an object for record ", i + 1);
+                displayText += "Record " + String(i + 1) + " (JSON but not object):\n";
+                displayText += dataRecords[i] + "\n\n";
+            }
         }
         else
         {
-            displayText += "Record " + String(i + 1) + ":\n";
-            displayText += dataRecords[i] + "\n\n";
+            LOGD("JSON parse failed for record ", i + 1, ": ", parseResult.getErrorMessage());
+            // Not JSON, use format-specific handlers
+            if (format == "binary")
+            {
+                displayText += formatBinaryRecord(dataRecords[i], i + 1);
+            }
+            else if (format == "brandbci")
+            {
+                displayText += formatBrandBCIRecord(dataRecords[i], i + 1);
+            }
+            else
+            {
+                displayText += "Record " + String(i + 1) + ":\n";
+                displayText += dataRecords[i] + "\n\n";
+            }
         }
     }
 
@@ -162,38 +207,68 @@ String RedisDataDisplayPopup::formatJsonRecord(const String& jsonStr, int record
 String RedisDataDisplayPopup::formatBinaryRecord(const String& binaryStr, int recordIndex)
 {
     String formatted;
-    formatted += "Record " + String(recordIndex) + " (Binary):\n";
+    formatted += "Record " + String(recordIndex) + " (" + format.toUpperCase() + "):\n";
     formatted += String::repeatedString("-", 30) + "\n";
-    
-    // Convert binary data to float array for display
-    const char* data = binaryStr.toRawUTF8();
-    size_t length = binaryStr.length();
-    
-    if (length % sizeof(float) == 0)
+
+    // Get raw binary data correctly
+    const char* data = binaryStr.getCharPointer().getAddress();
+    size_t length = binaryStr.getNumBytesAsUTF8();
+
+    formatted += "Raw " + format.toUpperCase() + " data (" + String(length) + " bytes):\n";
+
+    // Show hex representation for debugging
+    formatted += "Hex data: ";
+    for (size_t i = 0; i < jmin(length, (size_t)50); i++) // Show first 50 bytes
+    {
+        if (i > 0 && i % 16 == 0) formatted += "\n          ";
+        formatted += String::formatted("%02x ", (unsigned char)data[i]);
+    }
+    if (length > 50) formatted += "...";
+    formatted += "\n\n";
+
+    // Try to interpret as float array if length is appropriate
+    if (length >= sizeof(float) && length % sizeof(float) == 0)
     {
         int numFloats = length / sizeof(float);
         const float* floatData = reinterpret_cast<const float*>(data);
-        
+
         formatted += "Float values (" + String(numFloats) + "): [";
-        for (int i = 0; i < numFloats; i++)
+        int displayCount = jmin(numFloats, 10); // Show first 10 values
+
+        for (int i = 0; i < displayCount; i++)
         {
             if (i > 0) formatted += ", ";
-            formatted += String(floatData[i], 3);
-            if (i >= 5 && numFloats > 8) // Show first 5 and last 2 if many values
+
+            // Check for reasonable float values (avoid displaying garbage)
+            float value = floatData[i];
+            if (std::isfinite(value) && std::abs(value) < 1e6)
             {
-                formatted += ", ..., ";
-                formatted += String(floatData[numFloats-2], 3) + ", ";
-                formatted += String(floatData[numFloats-1], 3);
-                break;
+                formatted += String(value, 3);
+            }
+            else
+            {
+                formatted += String::formatted("0x%08x", *(uint32*)&value);
+            }
+        }
+
+        if (numFloats > displayCount)
+        {
+            formatted += ", ..., ";
+            float lastValue = floatData[numFloats-1];
+            if (std::isfinite(lastValue) && std::abs(lastValue) < 1e6)
+            {
+                formatted += String(lastValue, 3);
+            }
+            else
+            {
+                formatted += String::formatted("0x%08x", *(uint32*)&lastValue);
             }
         }
         formatted += "]\n";
     }
     else
     {
-        formatted += "Binary data (" + String(length) + " bytes): ";
-        formatted += "Invalid float array (length not multiple of 4)\n";
-        formatted += "Raw hex: ";
+        formatted += "Data length (" + String(length) + " bytes) not suitable for float array interpretation\n";
         for (size_t i = 0; i < jmin(length, (size_t)32); i++)
         {
             formatted += String::toHexString((uint8)data[i]).paddedLeft('0', 2) + " ";
@@ -202,6 +277,281 @@ String RedisDataDisplayPopup::formatBinaryRecord(const String& binaryStr, int re
         formatted += "\n";
     }
     
+    formatted += "\n";
+    return formatted;
+}
+
+String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, int recordIndex)
+{
+    String formatted;
+    formatted += "Record " + String(recordIndex) + " (BRANDBCI):\n";
+    formatted += String::repeatedString("-", 30) + "\n";
+
+    // Get raw binary data correctly
+    const char* data = brandBCIStr.getCharPointer().getAddress();
+    size_t length = brandBCIStr.getNumBytesAsUTF8();
+
+    formatted += "Raw BRANDBCI data (" + String(length) + " bytes):\n";
+
+    // First try to parse as JSON (for JSON-wrapped BRANDBCI)
+    var jsonData;
+    Result parseResult = JSON::parse(brandBCIStr, jsonData);
+
+    if (parseResult.wasOk())
+    {
+        // Handle BRANDBCI JSON format
+        formatted += "JSON format detected:\n";
+        if (jsonData.hasProperty("data"))
+        {
+            var dataArray = jsonData["data"];
+            if (dataArray.isArray())
+            {
+                formatted += "Data array (" + String(dataArray.size()) + " channels): [";
+                int displayCount = jmin(dataArray.size(), 10);
+                for (int i = 0; i < displayCount; i++)
+                {
+                    if (i > 0) formatted += ", ";
+                    formatted += String((double)dataArray[i], 3);
+                }
+                if (dataArray.size() > displayCount)
+                {
+                    formatted += ", ..., " + String((double)dataArray[dataArray.size()-1], 3);
+                }
+                formatted += "]\n";
+            }
+            else
+            {
+                formatted += "Data: " + dataArray.toString() + "\n";
+            }
+        }
+        if (jsonData.hasProperty("timestamp"))
+        {
+            formatted += "Timestamp: " + String((int64)jsonData["timestamp"]) + "\n";
+        }
+    }
+    else
+    {
+        // Handle binary BRANDBCI format
+        formatted += "Binary format detected:\n";
+
+        // Show hex representation
+        formatted += "Hex data: ";
+        for (size_t i = 0; i < jmin(length, (size_t)50); i++)
+        {
+            if (i > 0 && i % 16 == 0) formatted += "\n          ";
+            formatted += String::formatted("%02x ", (unsigned char)data[i]);
+        }
+        if (length > 50) formatted += "...";
+        formatted += "\n\n";
+
+        // Try to interpret as float array
+        if (length >= sizeof(float) && length % sizeof(float) == 0)
+        {
+            int numFloats = length / sizeof(float);
+            const float* floatData = reinterpret_cast<const float*>(data);
+
+            formatted += "Float values (" + String(numFloats) + "): [";
+            int displayCount = jmin(numFloats, 10);
+
+            for (int i = 0; i < displayCount; i++)
+            {
+                if (i > 0) formatted += ", ";
+
+                float value = floatData[i];
+                if (std::isfinite(value) && std::abs(value) < 1e6)
+                {
+                    formatted += String(value, 3);
+                }
+                else
+                {
+                    formatted += String::formatted("0x%08x", *(uint32*)&value);
+                }
+            }
+
+            if (numFloats > displayCount)
+            {
+                formatted += ", ..., ";
+                float lastValue = floatData[numFloats-1];
+                if (std::isfinite(lastValue) && std::abs(lastValue) < 1e6)
+                {
+                    formatted += String(lastValue, 3);
+                }
+                else
+                {
+                    formatted += String::formatted("0x%08x", *(uint32*)&lastValue);
+                }
+            }
+            formatted += "]\n";
+        }
+        else
+        {
+            formatted += "Data length not suitable for float array interpretation\n";
+        }
+    }
+
+    formatted += "\n";
+    return formatted;
+}
+
+String RedisDataDisplayPopup::formatOpenEphysRecord(const String& jsonStr, int recordIndex)
+{
+    String formatted;
+    formatted += "Record " + String(recordIndex) + " (Open Ephys Format):\n";
+    formatted += String::repeatedString("-", 30) + "\n";
+
+    var jsonData;
+    Result parseResult = JSON::parse(jsonStr, jsonData);
+
+    if (!parseResult.wasOk())
+    {
+        formatted += "Error parsing Open Ephys JSON data\n";
+        return formatted;
+    }
+
+    // Display metadata
+    if (jsonData.hasProperty("run"))
+        formatted += "Run: " + String((int)jsonData["run"]) + "\n";
+
+    if (jsonData.hasProperty("timestamp"))
+        formatted += "Timestamp: " + String((double)jsonData["timestamp"], 6) + "\n";
+
+    if (jsonData.hasProperty("sample_rate"))
+        formatted += "Sample Rate: " + String((int)jsonData["sample_rate"]) + " Hz\n";
+
+    if (jsonData.hasProperty("n_channels"))
+        formatted += "Channels: " + String((int)jsonData["n_channels"]) + "\n";
+
+    if (jsonData.hasProperty("n_samples"))
+        formatted += "Samples: " + String((int)jsonData["n_samples"]) + "\n";
+
+    if (jsonData.hasProperty("data_shape"))
+        formatted += "Data Shape: " + String(jsonData["data_shape"]) + "\n";
+
+    if (jsonData.hasProperty("data_dtype"))
+        formatted += "Data Type: " + String(jsonData["data_dtype"]) + "\n";
+
+    if (jsonData.hasProperty("data_bytes"))
+        formatted += "Binary Data: " + String((int)jsonData["data_bytes"]) + " bytes\n";
+
+    // Process binary data if available
+    if (jsonData.hasProperty("_binary_b64") || jsonData.hasProperty("_binary_data"))
+    {
+        MemoryBlock decoded;
+        bool hasDecoded = false;
+        String sourceType;
+
+        if (jsonData.hasProperty("_binary_b64"))
+        {
+            sourceType = "Base64";
+            String b64 = jsonData["_binary_b64"];
+            MemoryOutputStream mos(decoded, false);
+            hasDecoded = Base64::convertFromBase64(mos, b64);
+        }
+        else
+        {
+            // Legacy path: raw bytes stuffed into a String (may be corrupted by UTF-8)
+            sourceType = "raw-string (legacy)";
+            String raw = jsonData["_binary_data"];
+            decoded.append(raw.getCharPointer().getAddress(), raw.getNumBytesAsUTF8());
+            hasDecoded = true; // best-effort
+        }
+
+        formatted += "\nBinary Data Analysis (" + sourceType + "):\n";
+
+        if (!hasDecoded || decoded.getSize() == 0)
+        {
+            formatted += "No binary payload available\n\n";
+            return formatted;
+        }
+
+        const char* binaryData = static_cast<const char*>(decoded.getData());
+        size_t binaryLength = decoded.getSize();
+
+        formatted += "Raw data (" + String((int)binaryLength) + " bytes): ";
+
+        // Show hex preview
+        for (size_t i = 0; i < jmin(binaryLength, (size_t)32); i++)
+        {
+            if (i > 0 && i % 16 == 0) formatted += "\n                                ";
+            formatted += String::formatted("%02x ", (unsigned char)binaryData[i]);
+        }
+        if (binaryLength > 32) formatted += "...";
+        formatted += "\n";
+
+        // Try to interpret as float32 data
+        String dataType = jsonData.hasProperty("data_dtype") ? String(jsonData["data_dtype"]) : "unknown";
+        if (dataType == "float32" && binaryLength >= sizeof(float) && binaryLength % sizeof(float) == 0)
+        {
+            int numFloats = binaryLength / sizeof(float);
+            const float* floatData = reinterpret_cast<const float*>(binaryData);
+
+            formatted += "\nFloat32 Values (" + String(numFloats) + " total): [";
+            int displayCount = jmin(numFloats, 10); // Show first 10 values
+
+            for (int i = 0; i < displayCount; i++)
+            {
+                if (i > 0) formatted += ", ";
+                float value = floatData[i];
+                if (std::isfinite(value))
+                {
+                    formatted += String(value, 3);
+                }
+                else
+                {
+                    formatted += "NaN/Inf";
+                }
+            }
+
+            if (numFloats > displayCount)
+            {
+                formatted += ", ..., ";
+                float lastValue = floatData[numFloats-1];
+                if (std::isfinite(lastValue))
+                {
+                    formatted += String(lastValue, 3);
+                }
+                else
+                {
+                    formatted += "NaN/Inf";
+                }
+            }
+            formatted += "]\n";
+
+            // Calculate and show statistics
+            if (numFloats > 0)
+            {
+                float minVal = std::numeric_limits<float>::max();
+                float maxVal = std::numeric_limits<float>::lowest();
+                double sum = 0.0;
+                int validCount = 0;
+
+                for (int i = 0; i < numFloats; i++)
+                {
+                    float val = floatData[i];
+                    if (std::isfinite(val))
+                    {
+                        minVal = jmin(minVal, val);
+                        maxVal = jmax(maxVal, val);
+                        sum += val;
+                        validCount++;
+                    }
+                }
+
+                if (validCount > 0)
+                {
+                    formatted += "Statistics: Min=" + String(minVal, 3) +
+                               ", Max=" + String(maxVal, 3) +
+                               ", Mean=" + String(sum / validCount, 3) +
+                               ", Valid=" + String(validCount) + "/" + String(numFloats) + "\n";
+                }
+            }
+        }
+        else
+        {
+            formatted += "\nData type '" + dataType + "' or length not suitable for float32 interpretation\n";
+        }
+    }
+
     formatted += "\n";
     return formatted;
 }

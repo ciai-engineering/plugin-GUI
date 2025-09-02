@@ -96,6 +96,68 @@ public:
     /** Get available channels/streams from Redis */
     Array<String> getAvailableChannels();
 
+    /** Field discovery structures and methods */
+    enum class FieldDataType
+    {
+        SCALAR,
+        ARRAY_1D,
+        ARRAY_2D,
+        UNKNOWN
+    };
+
+    enum class Array2DProcessing
+    {
+        FIRST_ROW,
+        SUM,
+        MEAN
+    };
+
+    struct FieldInfo
+    {
+        String fieldName;
+        FieldDataType dataType;
+        Array<int> dimensions;  // [rows, cols] for 2D, [length] for 1D
+        String sampleData;      // Preview of the data
+        bool isSuitableForNeural; // Whether this field contains neural data
+
+        FieldInfo() : dataType(FieldDataType::UNKNOWN), isSuitableForNeural(false) {}
+
+        String getDisplayName() const
+        {
+            String result = fieldName;
+            if (dataType == FieldDataType::ARRAY_1D && dimensions.size() >= 1)
+            {
+                result += " (1D array, " + String(dimensions[0]) + " channels)";
+            }
+            else if (dataType == FieldDataType::ARRAY_2D && dimensions.size() >= 2)
+            {
+                result += " (2D array, " + String(dimensions[0]) + "x" + String(dimensions[1]) + ")";
+            }
+            else if (dataType == FieldDataType::SCALAR)
+            {
+                result += " (scalar - not suitable)";
+            }
+            return result;
+        }
+    };
+
+    /** Discover available data fields from Redis */
+    Array<FieldInfo> discoverDataFields();
+
+    /** Get sample data for field analysis */
+    String getSampleDataFromRedis(int numSamples = 3);
+
+    /** Analyze field structure from sample data */
+    Array<FieldInfo> analyzeFieldStructure(const String& sampleData);
+
+    /** Set selected data field for processing */
+    void setSelectedDataField(const String& fieldName);
+    String getSelectedDataField() const { return selectedDataField; }
+
+    /** Set 2D array processing method */
+    void setArray2DProcessing(Array2DProcessing method);
+    Array2DProcessing getArray2DProcessing() const { return array2DProcessing; }
+
     /** Configuration setters */
     void setRedisHost(const String& host);
     void setRedisPort(int port);
@@ -155,6 +217,10 @@ private:
     bool useStreamMode;
     String currentStreamId;        // Last read stream ID for XREAD
     bool alwaysReadLatest;         // If true, always read from latest data ($) instead of sequential
+
+    // Field discovery configuration
+    String selectedDataField;     // Selected field name for data extraction
+    Array2DProcessing array2DProcessing; // How to process 2D arrays
 
     // State management
     std::atomic<bool> isAcquiring;

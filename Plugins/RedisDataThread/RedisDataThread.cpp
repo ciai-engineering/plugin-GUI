@@ -44,6 +44,8 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , currentSampleNumber(0)
     , enableOpenEphysFormat(true)  // Enable by default
     , enableDataValidation(true)   // Enable validation by default
+    , selectedDataField("data")    // Default field name
+    , array2DProcessing(Array2DProcessing::FIRST_ROW)
 {
     LOGD("🚀 RedisDataThread constructor called");
     LOGD("Default configuration:");
@@ -442,17 +444,110 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
                     redisReply* fieldsReply = entryReply->element[1];
                     if (fieldsReply->type == REDIS_REPLY_ARRAY)
                     {
-                        // Look for brandbci_data field
+                        // Check if this is Open Ephys format by looking for specific fields
+                        bool hasOpenEphysFields = false;
+                        String availableFields = "";
+
                         for (size_t j = 0; j < fieldsReply->elements; j += 2)
                         {
-                            if (j + 1 < fieldsReply->elements &&
-                                fieldsReply->element[j]->type == REDIS_REPLY_STRING &&
-                                String(fieldsReply->element[j]->str) == "brandbci_data")
+                            if (j + 1 < fieldsReply->elements)
                             {
-                                String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
-                                records.add(record);
-                                LOGD("Stream record ", i, " length: ", record.length(), " bytes");
-                                break;
+                                String fieldName(fieldsReply->element[j]->str);
+                                availableFields += fieldName + " ";
+
+                                if (fieldName == "data_shape" || fieldName == "data_dtype" || fieldName == "n_samples")
+                                {
+                                    hasOpenEphysFields = true;
+                                }
+                            }
+                        }
+
+                        LOGD("Stream record ", i, " available fields: ", availableFields);
+                        LOGD("Open Ephys format detected: ", hasOpenEphysFields ? "YES" : "NO");
+
+                        if (hasOpenEphysFields)
+                        {
+                            // Create a structured representation of Open Ephys data for display
+                            var jsonObj = var(new DynamicObject());
+                            const char* binaryData = nullptr;
+                            size_t binaryDataLength = 0;
+
+                            for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                            {
+                                if (j + 1 < fieldsReply->elements)
+                                {
+                                    String fieldName(fieldsReply->element[j]->str);
+
+                                    // Handle binary data field specially
+                                    if (fieldName == "data")
+                                    {
+                                        binaryData = fieldsReply->element[j + 1]->str;
+                                        binaryDataLength = fieldsReply->element[j + 1]->len;
+                                        jsonObj.getDynamicObject()->setProperty("data_bytes", (int)binaryDataLength);
+                                    }
+                                    else
+                                    {
+                                        String fieldValue(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                    }
+                                }
+                            }
+
+                            // Add the binary data using Base64 to avoid corruption through UTF-8 conversion
+                            if (binaryData && binaryDataLength > 0)
+                            {
+                                MemoryBlock mb(binaryData, binaryDataLength);
+                                String b64 = Base64::toBase64(mb.getData(), mb.getSize());
+                                jsonObj.getDynamicObject()->setProperty("_binary_b64", b64);
+                            }
+
+                            String jsonRecord = JSON::toString(jsonObj);
+                            records.add(jsonRecord);
+                            LOGD("Open Ephys record ", i, " added, metadata + ", binaryDataLength, " bytes binary data");
+                        }
+                        else
+                        {
+                            // Look for legacy BRANDBCI or simple data fields
+                            String targetField = selectedDataField.isNotEmpty() ? selectedDataField : "data";
+                            bool foundData = false;
+
+                            for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                            {
+                                if (j + 1 < fieldsReply->elements &&
+                                    fieldsReply->element[j]->type == REDIS_REPLY_STRING)
+                                {
+                                    String fieldName(fieldsReply->element[j]->str);
+
+                                    // Check for selected field or common field names
+                                    if (fieldName == targetField ||
+                                        fieldName == "brandbci_data" ||
+                                        fieldName == "data")
+                                    {
+                                        String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        records.add(record);
+                                        LOGD("Legacy record ", i, " field: ", fieldName, ", length: ", record.length(), " bytes");
+                                        foundData = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If no data field found, create a JSON representation of all fields
+                            if (!foundData)
+                            {
+                                var jsonObj = var(new DynamicObject());
+                                for (size_t j = 0; j < fieldsReply->elements; j += 2)
+                                {
+                                    if (j + 1 < fieldsReply->elements)
+                                    {
+                                        String fieldName(fieldsReply->element[j]->str);
+                                        String fieldValue(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
+                                        jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                    }
+                                }
+                                String jsonRecord = JSON::toString(jsonObj);
+                                records.add(jsonRecord);
+                                LOGD("Generic record ", i, " (all fields as JSON), length: ", jsonRecord.length(), " bytes");
                             }
                         }
                     }
@@ -2243,6 +2338,17 @@ void RedisDataThread::saveConfigurationToXml(XmlElement* parentElement)
     mainNode->setAttribute("enableOpenEphysFormat", enableOpenEphysFormat);
     mainNode->setAttribute("enableDataValidation", enableDataValidation);
 
+    // Save field discovery settings
+    mainNode->setAttribute("selectedDataField", selectedDataField);
+    String processingMethod;
+    switch (array2DProcessing)
+    {
+        case Array2DProcessing::FIRST_ROW: processingMethod = "first_row"; break;
+        case Array2DProcessing::SUM: processingMethod = "sum"; break;
+        case Array2DProcessing::MEAN: processingMethod = "mean"; break;
+    }
+    mainNode->setAttribute("array2DProcessing", processingMethod);
+
     LOGD("Redis configuration saved to XML");
 }
 
@@ -2273,6 +2379,22 @@ void RedisDataThread::loadConfigurationFromXml(XmlElement* customParamsXml)
     enableOpenEphysFormat = mainNode->getBoolAttribute("enableOpenEphysFormat", true);
     enableDataValidation = mainNode->getBoolAttribute("enableDataValidation", true);
 
+    // Load field discovery settings
+    selectedDataField = mainNode->getStringAttribute("selectedDataField", "data");
+    String processingMethod = mainNode->getStringAttribute("array2DProcessing", "first_row");
+    if (processingMethod == "sum")
+    {
+        array2DProcessing = Array2DProcessing::SUM;
+    }
+    else if (processingMethod == "mean")
+    {
+        array2DProcessing = Array2DProcessing::MEAN;
+    }
+    else
+    {
+        array2DProcessing = Array2DProcessing::FIRST_ROW;
+    }
+
     // Validate loaded configuration
     if (!validateConfiguration()) {
         LOGD("Loaded configuration validation failed - using safe defaults");
@@ -2286,4 +2408,357 @@ void RedisDataThread::loadConfigurationFromXml(XmlElement* customParamsXml)
     LOGD("  - Sample Rate: ", sampleRate);
 }
 
+// Field Discovery Implementation
+Array<RedisDataThread::FieldInfo> RedisDataThread::discoverDataFields()
+{
+    Array<FieldInfo> fields;
+
+    if (!isConnected())
+    {
+        LOGE("Cannot discover fields: not connected to Redis");
+        return fields;
+    }
+
+    LOGD("Starting field discovery for channel: ", redisChannelName);
+
+    try
+    {
+        // Get sample data from Redis with timeout protection
+        String sampleData = getSampleDataFromRedis(3);
+        if (sampleData.isEmpty())
+        {
+            LOGE("No sample data available for field discovery - channel may be empty or inactive");
+            return fields;
+        }
+
+        // Analyze the sample data structure with error handling
+        fields = analyzeFieldStructure(sampleData);
+
+        if (fields.isEmpty())
+        {
+            LOGD("Field discovery completed but no suitable fields found");
+        }
+        else
+        {
+            LOGD("Field discovery completed. Found ", fields.size(), " fields");
+            for (const auto& field : fields)
+            {
+                LOGD("  - ", field.fieldName, ": ", field.getDisplayName());
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("Exception during field discovery: ", e.what());
+    }
+    catch (...)
+    {
+        LOGE("Unknown exception during field discovery");
+    }
+
+    return fields;
+}
+
+String RedisDataThread::getSampleDataFromRedis(int numSamples)
+{
+#ifdef REDIS_ENABLED
+    if (!redisCtx || !isConnected())
+    {
+        LOGE("Redis not connected");
+        return String();
+    }
+
+    String sampleData;
+
+    if (useStreamMode)
+    {
+        // Use XREVRANGE to get recent entries from stream
+        String command = "XREVRANGE " + redisChannelName + " + - COUNT " + String(numSamples);
+        redisReply* reply = (redisReply*)redisCommand(redisCtx, command.toRawUTF8());
+
+        if (!reply)
+        {
+            LOGE("Failed to execute XREVRANGE command");
+            return String();
+        }
+
+        if (reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        {
+            // Process the first entry for field discovery
+            if (reply->element[0]->type == REDIS_REPLY_ARRAY && reply->element[0]->elements >= 2)
+            {
+                redisReply* entryData = reply->element[0]->element[1];
+                if (entryData->type == REDIS_REPLY_ARRAY)
+                {
+                    // Convert field-value pairs to JSON for analysis
+                    var jsonObj = var(new DynamicObject());
+
+                    for (size_t i = 0; i < entryData->elements; i += 2)
+                    {
+                        if (i + 1 < entryData->elements)
+                        {
+                            String fieldName(entryData->element[i]->str);
+                            redisReply* valueReply = entryData->element[i + 1];
+
+                            // Handle binary data safely
+                            if (fieldName == "data" && valueReply->len > 0)
+                            {
+                                // For binary data fields, create a placeholder
+                                jsonObj.getDynamicObject()->setProperty(fieldName, "binary_data_placeholder");
+                            }
+                            else
+                            {
+                                // For text fields, convert safely
+                                String fieldValue(valueReply->str, valueReply->len);
+                                // Check if the string contains valid UTF-8
+                                if (fieldValue.isNotEmpty() && fieldValue.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,[]{}:\"- "))
+                                {
+                                    jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                }
+                                else
+                                {
+                                    jsonObj.getDynamicObject()->setProperty(fieldName, "binary_data");
+                                }
+                            }
+                        }
+                    }
+
+                    sampleData = JSON::toString(jsonObj);
+                }
+            }
+        }
+
+        freeReplyObject(reply);
+    }
+    else
+    {
+        // Use LRANGE to get recent list entries
+        String command = "LRANGE " + redisChannelName + " -" + String(numSamples) + " -1";
+        redisReply* reply = (redisReply*)redisCommand(redisCtx, command.toRawUTF8());
+
+        if (!reply)
+        {
+            LOGE("Failed to execute LRANGE command");
+            return String();
+        }
+
+        if (reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        {
+            // Use the most recent entry
+            sampleData = String(reply->element[reply->elements - 1]->str,
+                              reply->element[reply->elements - 1]->len);
+        }
+
+        freeReplyObject(reply);
+    }
+
+    LOGD("Retrieved sample data: ", sampleData.substring(0, 200), "...");
+    return sampleData;
+#else
+    LOGE("Redis not compiled - cannot get sample data");
+    return String();
+#endif
+}
+
+Array<RedisDataThread::FieldInfo> RedisDataThread::analyzeFieldStructure(const String& sampleData)
+{
+    Array<FieldInfo> fields;
+
+    try
+    {
+        // Handle different data formats
+        if (sampleData.isEmpty())
+        {
+            LOGD("Empty sample data for field analysis");
+            return fields;
+        }
+
+        // Try to parse as JSON first
+        var jsonData = JSON::parse(sampleData);
+        if (!jsonData.isObject())
+        {
+            LOGD("Sample data is not a JSON object, trying alternative parsing");
+
+            // For BRANDBCI format, create a default field entry
+            if (dataFormat == "brandbci")
+            {
+                FieldInfo defaultField;
+                defaultField.fieldName = "data";
+                defaultField.dataType = FieldDataType::ARRAY_1D;
+                defaultField.dimensions.add(numDataChannels);
+                defaultField.isSuitableForNeural = true;
+                defaultField.sampleData = "BRANDBCI format data (" + String(numDataChannels) + " channels)";
+                fields.add(defaultField);
+                return fields;
+            }
+
+            return fields;
+        }
+
+        DynamicObject* obj = jsonData.getDynamicObject();
+        if (!obj)
+        {
+            LOGE("Failed to get DynamicObject from JSON");
+            return fields;
+        }
+
+        // Analyze each field in the JSON object
+        for (auto& property : obj->getProperties())
+        {
+            FieldInfo fieldInfo;
+            fieldInfo.fieldName = property.name.toString();
+
+            var value = property.value;
+
+            // Analyze field type and dimensions
+            if (value.isArray())
+            {
+                Array<var>* arrayValue = value.getArray();
+                if (arrayValue && arrayValue->size() > 0)
+                {
+                    // Check if it's a 1D or 2D array
+                    var firstElement = (*arrayValue)[0];
+                    if (firstElement.isArray())
+                    {
+                        // 2D array
+                        fieldInfo.dataType = FieldDataType::ARRAY_2D;
+                        fieldInfo.dimensions.add(arrayValue->size()); // rows
+                        Array<var>* firstRow = firstElement.getArray();
+                        if (firstRow)
+                        {
+                            fieldInfo.dimensions.add(firstRow->size()); // columns
+                        }
+                        fieldInfo.isSuitableForNeural = true;
+                    }
+                    else if (firstElement.isDouble() || firstElement.isInt())
+                    {
+                        // 1D array of numbers
+                        fieldInfo.dataType = FieldDataType::ARRAY_1D;
+                        fieldInfo.dimensions.add(arrayValue->size());
+                        fieldInfo.isSuitableForNeural = true;
+                    }
+                    else
+                    {
+                        // Array of non-numeric data
+                        fieldInfo.dataType = FieldDataType::UNKNOWN;
+                        fieldInfo.isSuitableForNeural = false;
+                    }
+
+                    // Generate sample data preview with safe handling
+                    if (fieldInfo.isSuitableForNeural)
+                    {
+                        String preview = "Sample: [";
+                        int previewCount = std::min(3, arrayValue->size()); // Reduced count for cleaner display
+                        bool hasValidData = false;
+
+                        for (int i = 0; i < previewCount; i++)
+                        {
+                            try
+                            {
+                                if (fieldInfo.dataType == FieldDataType::ARRAY_2D)
+                                {
+                                    Array<var>* row = (*arrayValue)[i].getArray();
+                                    if (row && row->size() > 0)
+                                    {
+                                        double value = (double)(*row)[0];
+                                        if (std::isfinite(value)) // Check for valid numeric value
+                                        {
+                                            if (hasValidData) preview += ", ";
+                                            preview += String(value, 2); // Limit decimal places
+                                            if (row->size() > 1) preview += "...";
+                                            hasValidData = true;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    double value = (double)(*arrayValue)[i];
+                                    if (std::isfinite(value)) // Check for valid numeric value
+                                    {
+                                        if (hasValidData) preview += ", ";
+                                        preview += String(value, 2); // Limit decimal places
+                                        hasValidData = true;
+                                    }
+                                }
+                            }
+                            catch (...)
+                            {
+                                // Skip invalid data entries
+                                continue;
+                            }
+                        }
+
+                        if (!hasValidData)
+                        {
+                            preview = "Binary data detected";
+                        }
+                        else
+                        {
+                            if (arrayValue->size() > previewCount) preview += "...";
+                            preview += "]";
+                        }
+                        fieldInfo.sampleData = preview;
+                    }
+                }
+            }
+            else if (value.isDouble() || value.isInt())
+            {
+                // Scalar value
+                fieldInfo.dataType = FieldDataType::SCALAR;
+                fieldInfo.isSuitableForNeural = false;
+                fieldInfo.sampleData = "Value: " + String((double)value);
+            }
+            else
+            {
+                // String or other type - check for binary data placeholders
+                String valueStr = value.toString();
+                if (valueStr == "binary_data_placeholder" || valueStr == "binary_data")
+                {
+                    // This is a binary data field, assume it's suitable for neural data
+                    fieldInfo.dataType = FieldDataType::ARRAY_1D;
+                    fieldInfo.dimensions.add(numDataChannels); // Use configured channel count
+                    fieldInfo.isSuitableForNeural = true;
+                    fieldInfo.sampleData = "Binary array data (" + String(numDataChannels) + " channels)";
+                }
+                else
+                {
+                    fieldInfo.dataType = FieldDataType::UNKNOWN;
+                    fieldInfo.isSuitableForNeural = false;
+                    fieldInfo.sampleData = "Type: " + valueStr.substring(0, 50);
+                }
+            }
+
+            fields.add(fieldInfo);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("Exception analyzing field structure: ", e.what());
+    }
+    catch (...)
+    {
+        LOGE("Unknown exception analyzing field structure");
+    }
+
+    return fields;
+}
+
+void RedisDataThread::setSelectedDataField(const String& fieldName)
+{
+    selectedDataField = fieldName;
+    LOGD("Selected data field set to: ", selectedDataField);
+}
+
+void RedisDataThread::setArray2DProcessing(Array2DProcessing method)
+{
+    array2DProcessing = method;
+    String methodName;
+    switch (method)
+    {
+        case Array2DProcessing::FIRST_ROW: methodName = "First Row"; break;
+        case Array2DProcessing::SUM: methodName = "Sum"; break;
+        case Array2DProcessing::MEAN: methodName = "Mean"; break;
+    }
+    LOGD("2D array processing method set to: ", methodName);
+}
 
