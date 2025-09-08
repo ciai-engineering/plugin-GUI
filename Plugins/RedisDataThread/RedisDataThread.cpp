@@ -42,6 +42,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , isAcquiring(false)
     , connectionStatus(false)
     , currentSampleNumber(0)
+    , dataType("int16")  // Default data type
     , enableOpenEphysFormat(true)  // Enable by default
     , enableDataValidation(true)   // Enable validation by default
     , selectedDataField("data")    // Default field name
@@ -1712,8 +1713,12 @@ bool RedisDataThread::processOpenEphysData(const OpenEphysStreamData& data)
 
     // 3. Decode binary data
     Array<float> channelData;
+    String effectiveDataType = data.data_dtype.isEmpty() ? dataType : data.data_dtype;
+    LOGD("Using data type: ", effectiveDataType, " (from ",
+         data.data_dtype.isEmpty() ? "configuration default" : "stream metadata", ")");
+
     if (!decodeBinaryData(data.binary_data, data.data_length,
-                         data.data_dtype, shape, channelData))
+                         effectiveDataType, shape, channelData))
     {
         LOGE("Failed to decode binary data");
         return false;
@@ -2349,6 +2354,9 @@ void RedisDataThread::saveConfigurationToXml(XmlElement* parentElement)
     }
     mainNode->setAttribute("array2DProcessing", processingMethod);
 
+    // Save data type setting
+    mainNode->setAttribute("dataType", dataType);
+
     LOGD("Redis configuration saved to XML");
 }
 
@@ -2394,6 +2402,9 @@ void RedisDataThread::loadConfigurationFromXml(XmlElement* customParamsXml)
     {
         array2DProcessing = Array2DProcessing::FIRST_ROW;
     }
+
+    // Load data type setting
+    dataType = mainNode->getStringAttribute("dataType", "int16");
 
     // Validate loaded configuration
     if (!validateConfiguration()) {

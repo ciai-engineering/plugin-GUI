@@ -47,9 +47,9 @@ RedisConfigurationPanel::RedisConfigurationPanel(RedisDataThread* thread)
     // Start timer for status updates
     startTimer(2000); // Update every 2 seconds
 
-    // Calculate required height: title(35) + connection(150) + spacing(15) + stream(380) + spacing(15) + advanced(120) + spacing(15) + controls(120) + margin(20)
-    int requiredHeight = 35 + 150 + 15 + 380 + 15 + 120 + 15 + 120 + 20;
-    setSize(420, requiredHeight); // Total: 870px
+    // Calculate required height: title(35) + connection(150) + spacing(15) + stream(405) + spacing(15) + advanced(120) + spacing(15) + controls(120) + margin(20)
+    int requiredHeight = 35 + 150 + 15 + 405 + 15 + 120 + 15 + 120 + 20;
+    setSize(420, requiredHeight); // Total: 895px (added 25px for data type row)
 }
 
 RedisConfigurationPanel::~RedisConfigurationPanel()
@@ -72,7 +72,7 @@ void RedisConfigurationPanel::resized()
 {
     int yPos = 35;
     int connectionGroupHeight = 150; // Increased to accommodate Test button
-    int streamGroupHeight = 320;     // Reduced to match button-to-border spacing with Connection Settings
+    int streamGroupHeight = 345;     // Increased to accommodate data type selection row
     int advancedGroupHeight = 120;   // Standard height for Advanced Settings
     int controlButtonsHeight = 120;  // Space needed for control buttons and status
     int margin = 10;
@@ -327,6 +327,34 @@ void RedisConfigurationPanel::createStreamGroup()
 
     yOffset += rowHeight;
 
+    // Data Type Selection
+    dataTypeLabel = std::make_unique<Label>("Data Type Label", "Data Type:");
+    dataTypeLabel->setBounds(15, yOffset, labelWidth, 20);
+    dataTypeLabel->setFont(FontOptions("Inter", "Regular", 12));
+    streamGroup->addAndMakeVisible(dataTypeLabel.get());
+
+    dataTypeComboBox = std::make_unique<ComboBox>("Data Type ComboBox");
+    dataTypeComboBox->setBounds(100, yOffset, 160, 20);
+    dataTypeComboBox->addItem("float32", 1);
+    dataTypeComboBox->addItem("float64", 2);
+    dataTypeComboBox->addItem("int16 (default)", 3);
+    dataTypeComboBox->addItem("int32", 4);
+    dataTypeComboBox->addItem("uint16", 5);
+    dataTypeComboBox->setSelectedItemIndex(2); // Default to int16
+    dataTypeComboBox->addListener(this);
+    dataTypeComboBox->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
+    dataTypeComboBox->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
+    dataTypeComboBox->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
+    streamGroup->addAndMakeVisible(dataTypeComboBox.get());
+
+    dataTypeTooltip = std::make_unique<Label>("Data Type Tooltip", "(used when dtype not specified)");
+    dataTypeTooltip->setBounds(265, yOffset, 150, 20);
+    dataTypeTooltip->setFont(FontOptions("Inter", "Regular", 10));
+    dataTypeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+    streamGroup->addAndMakeVisible(dataTypeTooltip.get());
+
+    yOffset += rowHeight;
+
     // 2D Array Processing
     array2DProcessingLabel = std::make_unique<Label>("2D Processing Label", "2D Processing:");
     array2DProcessingLabel->setBounds(15, yOffset, labelWidth, 20);
@@ -510,6 +538,10 @@ void RedisConfigurationPanel::comboBoxChanged(ComboBox* comboBox)
             channelComboBox->setText(channelName, dontSendNotification);
         }
 
+        applyToThread();
+    }
+    else if (comboBox == dataTypeComboBox.get())
+    {
         applyToThread();
     }
     else if (comboBox == presetCombo.get())
@@ -781,6 +813,16 @@ void RedisConfigurationPanel::updateFromThread()
     int formatIndex = format == "brandbci" ? 0 : format == "json" ? 1 : 2;
     dataFormatCombo->setSelectedItemIndex(formatIndex, dontSendNotification);
 
+    // Update data type setting
+    String currentDataType = dataThread->getDataType();
+    int dataTypeIndex = 2; // Default to int16
+    if (currentDataType == "float32") dataTypeIndex = 0;
+    else if (currentDataType == "float64") dataTypeIndex = 1;
+    else if (currentDataType == "int16") dataTypeIndex = 2;
+    else if (currentDataType == "int32") dataTypeIndex = 3;
+    else if (currentDataType == "uint16") dataTypeIndex = 4;
+    dataTypeComboBox->setSelectedItemIndex(dataTypeIndex, dontSendNotification);
+
     // Update advanced settings
     bufferSizeEditor->setText(String(dataThread->getBufferSize()), false);
     openEphysFormatButton->setToggleState(dataThread->isOpenEphysFormatEnabled(), dontSendNotification);
@@ -856,6 +898,20 @@ void RedisConfigurationPanel::applyToThread()
         String fieldName = selectedFieldText.upToFirstOccurrenceOf(" (", false, false);
         dataThread->setSelectedDataField(fieldName);
     }
+
+    // Apply data type setting
+    int dataTypeIndex = dataTypeComboBox->getSelectedItemIndex();
+    String dataType;
+    switch (dataTypeIndex)
+    {
+        case 0: dataType = "float32"; break;
+        case 1: dataType = "float64"; break;
+        case 2: dataType = "int16"; break;
+        case 3: dataType = "int32"; break;
+        case 4: dataType = "uint16"; break;
+        default: dataType = "int16"; break;
+    }
+    dataThread->setDataType(dataType);
 
     // Apply 2D processing method
     int processingIndex = array2DProcessingComboBox->getSelectedItemIndex();
@@ -1501,6 +1557,9 @@ void RedisConfigurationPanel::refreshAvailableFields()
         // Get available fields from Redis with error handling
         Array<RedisDataThread::FieldInfo> fields = dataThread->discoverDataFields();
 
+        // Try to detect data type from stream metadata
+        detectAndUpdateDataType();
+
     // Clear existing items
     dataFieldComboBox->clear();
 
@@ -1592,6 +1651,61 @@ void RedisConfigurationPanel::refreshAvailableFields()
         AlertWindow::showMessageBox(AlertWindow::WarningIcon,
                                    "Field Discovery Failed",
                                    "An unexpected error occurred while discovering data fields. Please check your connection and try again.");
+    }
+}
+
+void RedisConfigurationPanel::detectAndUpdateDataType()
+{
+    if (!dataThread->isConnected())
+    {
+        return;
+    }
+
+    try
+    {
+        // Get latest records to check for data_dtype field
+        Array<String> latestRecords = dataThread->getLatestRecords(5);
+
+        for (const String& record : latestRecords)
+        {
+            try
+            {
+                var jsonData = JSON::parse(record);
+                if (jsonData.isObject() && jsonData.hasProperty("data_dtype"))
+                {
+                    String detectedType = jsonData["data_dtype"].toString();
+                    LOGD("Detected data type from stream: ", detectedType);
+
+                    // Map detected type to combo box index
+                    int typeIndex = 2; // Default to int16
+                    if (detectedType == "float32" || detectedType == "<f4") typeIndex = 0;
+                    else if (detectedType == "float64" || detectedType == "<f8") typeIndex = 1;
+                    else if (detectedType == "int16" || detectedType == "<i2") typeIndex = 2;
+                    else if (detectedType == "int32" || detectedType == "<i4") typeIndex = 3;
+                    else if (detectedType == "uint16" || detectedType == "<u2") typeIndex = 4;
+
+                    // Update combo box if different from current selection
+                    if (dataTypeComboBox->getSelectedItemIndex() != typeIndex)
+                    {
+                        dataTypeComboBox->setSelectedItemIndex(typeIndex, dontSendNotification);
+                        applyToThread(); // Apply the detected type
+                        LOGD("Updated data type selection to: ", detectedType);
+                    }
+                    return; // Found dtype, no need to check more records
+                }
+            }
+            catch (...)
+            {
+                // Skip invalid JSON records
+                continue;
+            }
+        }
+
+        LOGD("No data_dtype found in recent records, keeping current setting");
+    }
+    catch (...)
+    {
+        LOGE("Error detecting data type from stream");
     }
 }
 
