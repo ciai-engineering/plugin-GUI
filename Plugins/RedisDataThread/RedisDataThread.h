@@ -253,12 +253,19 @@ private:
     bool enableOpenEphysFormat;
     bool enableDataValidation;
 
+    // Data type configuration
+    String dataType;  // Default data type for parsing (float32, int16, etc.)
+
 public:
     // Configuration getters and setters
     void setOpenEphysFormatEnabled(bool enabled) { enableOpenEphysFormat = enabled; }
     void setDataValidationEnabled(bool enabled) { enableDataValidation = enabled; }
     bool isOpenEphysFormatEnabled() const { return enableOpenEphysFormat; }
     bool isDataValidationEnabled() const { return enableDataValidation; }
+
+    // Data type configuration
+    void setDataType(const String& dtype) { dataType = dtype; }
+    String getDataType() const { return dataType; }
 
 private:
 

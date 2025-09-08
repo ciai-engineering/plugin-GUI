@@ -107,6 +107,9 @@ public:
     /** Update field preview based on selected field */
     void updateFieldPreview();
 
+    /** Detect and update data type from stream metadata */
+    void detectAndUpdateDataType();
+
 private:
     RedisDataThread* dataThread;
     
@@ -155,6 +158,11 @@ private:
 
     std::unique_ptr<Label> fieldPreviewLabel;
     std::unique_ptr<Label> fieldPreviewText;
+
+    // Data type selection
+    std::unique_ptr<Label> dataTypeLabel;
+    std::unique_ptr<ComboBox> dataTypeComboBox;
+    std::unique_ptr<Label> dataTypeTooltip;
     
     // Format settings
     std::unique_ptr<Label> sampleRateLabel;
