@@ -478,80 +478,335 @@ String RedisDataDisplayPopup::formatOpenEphysRecord(const String& jsonStr, int r
         if (binaryLength > 32) formatted += "...";
         formatted += "\n";
 
-        // Try to interpret as float32 data
+        // Interpret binary data based on data type
         String dataType = jsonData.hasProperty("data_dtype") ? String(jsonData["data_dtype"]) : "unknown";
-        if (dataType == "float32" && binaryLength >= sizeof(float) && binaryLength % sizeof(float) == 0)
+        formatted += "\nBinary Data Interpretation (type: " + dataType + "):\n";
+
+        bool interpreted = false;
+
+        // Handle different data types
+        if (dataType == "float32" || dataType == "<f4")
         {
-            int numFloats = binaryLength / sizeof(float);
-            const float* floatData = reinterpret_cast<const float*>(binaryData);
-
-            formatted += "\nFloat32 Values (" + String(numFloats) + " total): [";
-            int displayCount = jmin(numFloats, 10); // Show first 10 values
-
-            for (int i = 0; i < displayCount; i++)
-            {
-                if (i > 0) formatted += ", ";
-                float value = floatData[i];
-                if (std::isfinite(value))
-                {
-                    formatted += String(value, 3);
-                }
-                else
-                {
-                    formatted += "NaN/Inf";
-                }
-            }
-
-            if (numFloats > displayCount)
-            {
-                formatted += ", ..., ";
-                float lastValue = floatData[numFloats-1];
-                if (std::isfinite(lastValue))
-                {
-                    formatted += String(lastValue, 3);
-                }
-                else
-                {
-                    formatted += "NaN/Inf";
-                }
-            }
-            formatted += "]\n";
-
-            // Calculate and show statistics
-            if (numFloats > 0)
-            {
-                float minVal = std::numeric_limits<float>::max();
-                float maxVal = std::numeric_limits<float>::lowest();
-                double sum = 0.0;
-                int validCount = 0;
-
-                for (int i = 0; i < numFloats; i++)
-                {
-                    float val = floatData[i];
-                    if (std::isfinite(val))
-                    {
-                        minVal = jmin(minVal, val);
-                        maxVal = jmax(maxVal, val);
-                        sum += val;
-                        validCount++;
-                    }
-                }
-
-                if (validCount > 0)
-                {
-                    formatted += "Statistics: Min=" + String(minVal, 3) +
-                               ", Max=" + String(maxVal, 3) +
-                               ", Mean=" + String(sum / validCount, 3) +
-                               ", Valid=" + String(validCount) + "/" + String(numFloats) + "\n";
-                }
-            }
+            interpreted = formatFloat32Data(formatted, binaryData, binaryLength);
         }
-        else
+        else if (dataType == "float64" || dataType == "<f8")
         {
-            formatted += "\nData type '" + dataType + "' or length not suitable for float32 interpretation\n";
+            interpreted = formatFloat64Data(formatted, binaryData, binaryLength);
+        }
+        else if (dataType == "int16" || dataType == "<i2")
+        {
+            interpreted = formatInt16Data(formatted, binaryData, binaryLength);
+        }
+        else if (dataType == "int32" || dataType == "<i4")
+        {
+            interpreted = formatInt32Data(formatted, binaryData, binaryLength);
+        }
+        else if (dataType == "uint16" || dataType == "<u2")
+        {
+            interpreted = formatUInt16Data(formatted, binaryData, binaryLength);
+        }
+
+        if (!interpreted)
+        {
+            formatted += "Data type '" + dataType + "' not supported for interpretation or invalid data length\n";
+            formatted += "Raw hex data: ";
+            for (size_t i = 0; i < jmin(binaryLength, (size_t)32); i++)
+            {
+                formatted += String::formatted("%02x ", (unsigned char)binaryData[i]);
+            }
+            if (binaryLength > 32) formatted += "...";
+            formatted += "\n";
         }
     }
 
     formatted += "\n";
     return formatted;
+}
+
+bool RedisDataDisplayPopup::formatFloat32Data(String& output, const char* data, size_t length)
+{
+    if (length < sizeof(float) || length % sizeof(float) != 0)
+        return false;
+
+    int numFloats = length / sizeof(float);
+    const float* floatData = reinterpret_cast<const float*>(data);
+
+    output += "Float32 Values (" + String(numFloats) + " total): [";
+    int displayCount = jmin(numFloats, 10);
+
+    for (int i = 0; i < displayCount; i++)
+    {
+        if (i > 0) output += ", ";
+        float value = floatData[i];
+        if (std::isfinite(value))
+        {
+            output += String(value, 3);
+        }
+        else
+        {
+            output += "NaN/Inf";
+        }
+    }
+
+    if (numFloats > displayCount)
+    {
+        output += ", ..., ";
+        float lastValue = floatData[numFloats-1];
+        if (std::isfinite(lastValue))
+        {
+            output += String(lastValue, 3);
+        }
+        else
+        {
+            output += "NaN/Inf";
+        }
+    }
+    output += "]\n";
+
+    // Calculate statistics
+    if (numFloats > 0)
+    {
+        float minVal = std::numeric_limits<float>::max();
+        float maxVal = std::numeric_limits<float>::lowest();
+        double sum = 0.0;
+        int validCount = 0;
+
+        for (int i = 0; i < numFloats; i++)
+        {
+            float val = floatData[i];
+            if (std::isfinite(val))
+            {
+                minVal = jmin(minVal, val);
+                maxVal = jmax(maxVal, val);
+                sum += val;
+                validCount++;
+            }
+        }
+
+        if (validCount > 0)
+        {
+            output += "Statistics: Min=" + String(minVal, 3) +
+                     ", Max=" + String(maxVal, 3) +
+                     ", Mean=" + String(sum / validCount, 3) +
+                     ", Valid=" + String(validCount) + "/" + String(numFloats) + "\n";
+        }
+    }
+
+    return true;
+}
+
+bool RedisDataDisplayPopup::formatFloat64Data(String& output, const char* data, size_t length)
+{
+    if (length < sizeof(double) || length % sizeof(double) != 0)
+        return false;
+
+    int numDoubles = length / sizeof(double);
+    const double* doubleData = reinterpret_cast<const double*>(data);
+
+    output += "Float64 Values (" + String(numDoubles) + " total): [";
+    int displayCount = jmin(numDoubles, 10);
+
+    for (int i = 0; i < displayCount; i++)
+    {
+        if (i > 0) output += ", ";
+        double value = doubleData[i];
+        if (std::isfinite(value))
+        {
+            output += String(value, 6);
+        }
+        else
+        {
+            output += "NaN/Inf";
+        }
+    }
+
+    if (numDoubles > displayCount)
+    {
+        output += ", ..., ";
+        double lastValue = doubleData[numDoubles-1];
+        if (std::isfinite(lastValue))
+        {
+            output += String(lastValue, 6);
+        }
+        else
+        {
+            output += "NaN/Inf";
+        }
+    }
+    output += "]\n";
+
+    // Calculate statistics
+    if (numDoubles > 0)
+    {
+        double minVal = std::numeric_limits<double>::max();
+        double maxVal = std::numeric_limits<double>::lowest();
+        double sum = 0.0;
+        int validCount = 0;
+
+        for (int i = 0; i < numDoubles; i++)
+        {
+            double val = doubleData[i];
+            if (std::isfinite(val))
+            {
+                minVal = jmin(minVal, val);
+                maxVal = jmax(maxVal, val);
+                sum += val;
+                validCount++;
+            }
+        }
+
+        if (validCount > 0)
+        {
+            output += "Statistics: Min=" + String(minVal, 6) +
+                     ", Max=" + String(maxVal, 6) +
+                     ", Mean=" + String(sum / validCount, 6) +
+                     ", Valid=" + String(validCount) + "/" + String(numDoubles) + "\n";
+        }
+    }
+
+    return true;
+}
+
+bool RedisDataDisplayPopup::formatInt16Data(String& output, const char* data, size_t length)
+{
+    if (length < sizeof(int16) || length % sizeof(int16) != 0)
+        return false;
+
+    int numInt16s = length / sizeof(int16);
+    const int16* int16Data = reinterpret_cast<const int16*>(data);
+
+    output += "Int16 Values (" + String(numInt16s) + " total): [";
+    int displayCount = jmin(numInt16s, 10);
+
+    for (int i = 0; i < displayCount; i++)
+    {
+        if (i > 0) output += ", ";
+        output += String(int16Data[i]);
+    }
+
+    if (numInt16s > displayCount)
+    {
+        output += ", ..., ";
+        output += String(int16Data[numInt16s-1]);
+    }
+    output += "]\n";
+
+    // Calculate statistics
+    if (numInt16s > 0)
+    {
+        int16 minVal = std::numeric_limits<int16>::max();
+        int16 maxVal = std::numeric_limits<int16>::lowest();
+        long long sum = 0;
+
+        for (int i = 0; i < numInt16s; i++)
+        {
+            int16 val = int16Data[i];
+            minVal = jmin(minVal, val);
+            maxVal = jmax(maxVal, val);
+            sum += val;
+        }
+
+        output += "Statistics: Min=" + String(minVal) +
+                 ", Max=" + String(maxVal) +
+                 ", Mean=" + String((double)sum / numInt16s, 2) +
+                 ", Count=" + String(numInt16s) + "\n";
+    }
+
+    return true;
+}
+
+bool RedisDataDisplayPopup::formatInt32Data(String& output, const char* data, size_t length)
+{
+    if (length < sizeof(int32) || length % sizeof(int32) != 0)
+        return false;
+
+    int numInt32s = length / sizeof(int32);
+    const int32* int32Data = reinterpret_cast<const int32*>(data);
+
+    output += "Int32 Values (" + String(numInt32s) + " total): [";
+    int displayCount = jmin(numInt32s, 10);
+
+    for (int i = 0; i < displayCount; i++)
+    {
+        if (i > 0) output += ", ";
+        output += String(int32Data[i]);
+    }
+
+    if (numInt32s > displayCount)
+    {
+        output += ", ..., ";
+        output += String(int32Data[numInt32s-1]);
+    }
+    output += "]\n";
+
+    // Calculate statistics
+    if (numInt32s > 0)
+    {
+        int32 minVal = std::numeric_limits<int32>::max();
+        int32 maxVal = std::numeric_limits<int32>::lowest();
+        long long sum = 0;
+
+        for (int i = 0; i < numInt32s; i++)
+        {
+            int32 val = int32Data[i];
+            minVal = jmin(minVal, val);
+            maxVal = jmax(maxVal, val);
+            sum += val;
+        }
+
+        output += "Statistics: Min=" + String(minVal) +
+                 ", Max=" + String(maxVal) +
+                 ", Mean=" + String((double)sum / numInt32s, 2) +
+                 ", Count=" + String(numInt32s) + "\n";
+    }
+
+    return true;
+}
+
+bool RedisDataDisplayPopup::formatUInt16Data(String& output, const char* data, size_t length)
+{
+    if (length < sizeof(uint16) || length % sizeof(uint16) != 0)
+        return false;
+
+    int numUInt16s = length / sizeof(uint16);
+    const uint16* uint16Data = reinterpret_cast<const uint16*>(data);
+
+    output += "UInt16 Values (" + String(numUInt16s) + " total): [";
+    int displayCount = jmin(numUInt16s, 10);
+
+    for (int i = 0; i < displayCount; i++)
+    {
+        if (i > 0) output += ", ";
+        output += String(uint16Data[i]);
+    }
+
+    if (numUInt16s > displayCount)
+    {
+        output += ", ..., ";
+        output += String(uint16Data[numUInt16s-1]);
+    }
+    output += "]\n";
+
+    // Calculate statistics
+    if (numUInt16s > 0)
+    {
+        uint16 minVal = std::numeric_limits<uint16>::max();
+        uint16 maxVal = std::numeric_limits<uint16>::lowest();
+        unsigned long long sum = 0;
+
+        for (int i = 0; i < numUInt16s; i++)
+        {
+            uint16 val = uint16Data[i];
+            minVal = jmin(minVal, val);
+            maxVal = jmax(maxVal, val);
+            sum += val;
+        }
+
+        output += "Statistics: Min=" + String(minVal) +
+                 ", Max=" + String(maxVal) +
+                 ", Mean=" + String((double)sum / numUInt16s, 2) +
+                 ", Count=" + String(numUInt16s) + "\n";
+    }
+
+    return true;
 }

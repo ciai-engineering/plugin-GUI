@@ -63,6 +63,13 @@ private:
     String formatBrandBCIRecord(const String& brandBCIStr, int recordIndex);
     String formatOpenEphysRecord(const String& jsonStr, int recordIndex);
 
+    // Data type formatting methods
+    bool formatFloat32Data(String& output, const char* data, size_t length);
+    bool formatFloat64Data(String& output, const char* data, size_t length);
+    bool formatInt16Data(String& output, const char* data, size_t length);
+    bool formatInt32Data(String& output, const char* data, size_t length);
+    bool formatUInt16Data(String& output, const char* data, size_t length);
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisDataDisplayPopup);
 };
 
