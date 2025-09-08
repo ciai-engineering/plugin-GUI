@@ -202,6 +202,9 @@ private:
     std::unique_ptr<Label> validationStatus;
     std::unique_ptr<Label> connectionStatus;
     std::unique_ptr<Label> performanceHints;
+
+    // Preset loading state
+    String pendingDataFieldSelection; // Used to restore data field selection after preset loading
     
     // Helper methods
     void createConnectionGroup();

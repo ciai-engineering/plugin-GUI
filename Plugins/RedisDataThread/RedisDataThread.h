@@ -273,6 +273,7 @@ private:
     bool parseJsonData(const String& jsonStr, Array<float>& channelData);
     bool parseBinaryData(const char* data, size_t length, Array<float>& channelData);
     bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
+    bool parseBinarySpikeRates(redisReply* fieldReply, Array<float>& channelData);
 
     // New Open Ephys format methods
     bool processOpenEphysStreamEntry(redisReply* fieldsReply);
