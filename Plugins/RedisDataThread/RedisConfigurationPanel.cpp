@@ -1181,6 +1181,11 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         bufferSizeEditor->setText("5000");
         openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
+
+        // Set default field discovery settings for neural_data_simulator.py compatibility
+        dataTypeComboBox->setSelectedItemIndex(2); // int16 (default)
+        array2DProcessingComboBox->setSelectedItemIndex(0); // first_row
+        pendingDataFieldSelection = "spike_rates"; // For neural_data_simulator.py
     }
     else if (presetName == "High Density (96ch, 30kHz)")
     {
@@ -1256,6 +1261,27 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
                 openEphysFormatButton->setToggleState(xml->getBoolAttribute("openEphysFormat", true), dontSendNotification);
                 dataValidationButton->setToggleState(xml->getBoolAttribute("dataValidation", true), dontSendNotification);
 
+                // Load field discovery settings (critical for View Data consistency)
+                String savedDataField = xml->getStringAttribute("selectedDataField", "data");
+                // Store for later application after field discovery
+                pendingDataFieldSelection = savedDataField;
+
+                // Load data type setting
+                String savedDataType = xml->getStringAttribute("dataType", "int16");
+                if (savedDataType == "float32") dataTypeComboBox->setSelectedItemIndex(0);
+                else if (savedDataType == "float64") dataTypeComboBox->setSelectedItemIndex(1);
+                else if (savedDataType == "int16") dataTypeComboBox->setSelectedItemIndex(2);
+                else if (savedDataType == "int32") dataTypeComboBox->setSelectedItemIndex(3);
+                else if (savedDataType == "uint16") dataTypeComboBox->setSelectedItemIndex(4);
+                else dataTypeComboBox->setSelectedItemIndex(2); // Default to int16
+
+                // Load 2D array processing method
+                String savedProcessingMethod = xml->getStringAttribute("array2DProcessing", "first_row");
+                if (savedProcessingMethod == "first_row") array2DProcessingComboBox->setSelectedItemIndex(0);
+                else if (savedProcessingMethod == "sum") array2DProcessingComboBox->setSelectedItemIndex(1);
+                else if (savedProcessingMethod == "mean") array2DProcessingComboBox->setSelectedItemIndex(2);
+                else array2DProcessingComboBox->setSelectedItemIndex(0); // Default to first_row
+
                 LOGD("Loaded custom preset: ", presetName);
             }
             else
@@ -1278,6 +1304,30 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
     // Apply the preset
     applyToThread();
     updateValidationStatus();
+
+    // Handle pending data field selection after applying configuration
+    if (pendingDataFieldSelection.isNotEmpty())
+    {
+        // Refresh fields to ensure they're discovered with the new configuration
+        refreshAvailableFields();
+
+        // Try to select the saved data field
+        for (int i = 0; i < dataFieldComboBox->getNumItems(); i++)
+        {
+            String itemText = dataFieldComboBox->getItemText(i);
+            String fieldName = itemText.upToFirstOccurrenceOf(" (", false, false);
+            if (fieldName == pendingDataFieldSelection)
+            {
+                dataFieldComboBox->setSelectedItemIndex(i, dontSendNotification);
+                // Apply the field selection to the thread
+                applyToThread();
+                break;
+            }
+        }
+
+        // Clear the pending selection
+        pendingDataFieldSelection = "";
+    }
 }
 
 void RedisConfigurationPanel::showHelpDialog()
@@ -1381,7 +1431,11 @@ void RedisConfigurationPanel::showLatestData()
         return;
     }
 
-    // Retrieve latest records from Redis
+    // CRITICAL: Apply current UI configuration to thread before retrieving data
+    // This ensures View Data uses the same configuration as the running signal chain
+    applyToThread();
+
+    // Retrieve latest records from Redis using the current configuration
     Array<String> records = dataThread->getLatestRecords(10);
 
     // Create and show popup with the data
@@ -1508,6 +1562,45 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
     xml.setAttribute("bufferSize", bufferSizeEditor->getText());
     xml.setAttribute("openEphysFormat", openEphysFormatButton->getToggleState());
     xml.setAttribute("dataValidation", dataValidationButton->getToggleState());
+
+    // Save field discovery settings (critical for View Data consistency)
+    String selectedFieldText = dataFieldComboBox->getText();
+    if (selectedFieldText.isNotEmpty() && selectedFieldText != "No fields found")
+    {
+        // Extract field name from display text (before the first parenthesis)
+        String fieldName = selectedFieldText.upToFirstOccurrenceOf(" (", false, false);
+        xml.setAttribute("selectedDataField", fieldName);
+    }
+    else
+    {
+        xml.setAttribute("selectedDataField", "data"); // Default fallback
+    }
+
+    // Save data type setting
+    int dataTypeIndex = dataTypeComboBox->getSelectedItemIndex();
+    String dataType;
+    switch (dataTypeIndex)
+    {
+        case 0: dataType = "float32"; break;
+        case 1: dataType = "float64"; break;
+        case 2: dataType = "int16"; break;
+        case 3: dataType = "int32"; break;
+        case 4: dataType = "uint16"; break;
+        default: dataType = "int16"; break;
+    }
+    xml.setAttribute("dataType", dataType);
+
+    // Save 2D array processing method
+    int array2DIndex = array2DProcessingComboBox->getSelectedItemIndex();
+    String processingMethod;
+    switch (array2DIndex)
+    {
+        case 0: processingMethod = "first_row"; break;
+        case 1: processingMethod = "sum"; break;
+        case 2: processingMethod = "mean"; break;
+        default: processingMethod = "first_row"; break;
+    }
+    xml.setAttribute("array2DProcessing", processingMethod);
 
     // Write to file
     if (!xml.writeTo(presetFile))

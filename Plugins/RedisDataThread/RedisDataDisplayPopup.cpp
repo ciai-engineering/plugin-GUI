@@ -293,6 +293,69 @@ String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, in
 
     formatted += "Raw BRANDBCI data (" + String(length) + " bytes):\n";
 
+    // Check if this looks like spike_rates data (uint8 array from neural_data_simulator.py)
+    // Spike rates are typically small values (0-255) and the length should match expected channel count
+    bool looksLikeSpikeRates = (length > 0 && length <= 512); // Reasonable channel count range
+    if (looksLikeSpikeRates)
+    {
+        // Check if all values are in reasonable spike rate range (0-255 for uint8)
+        bool allValuesReasonable = true;
+        for (size_t i = 0; i < length && i < 100; i++) // Check first 100 bytes
+        {
+            uint8_t val = static_cast<uint8_t>(data[i]);
+            // Spike rates should typically be in range 0-100, but allow up to 255 for uint8
+            if (val > 255) // This check is redundant for uint8, but kept for clarity
+            {
+                allValuesReasonable = false;
+                break;
+            }
+        }
+
+        if (allValuesReasonable)
+        {
+            formatted += "Detected: Spike rates data (neural_data_simulator.py format)\n";
+            formatted += "Interpreting as uint8 spike rates (" + String(length) + " channels):\n";
+
+            const uint8_t* uint8Data = reinterpret_cast<const uint8_t*>(data);
+            formatted += "Spike rates: [";
+            int displayCount = jmin((int)length, 10);
+
+            for (int i = 0; i < displayCount; i++)
+            {
+                if (i > 0) formatted += ", ";
+                formatted += String((int)uint8Data[i]);
+            }
+
+            if (length > displayCount)
+            {
+                formatted += ", ..., " + String((int)uint8Data[length-1]);
+            }
+            formatted += "]\n";
+
+            // Show statistics for spike rates
+            if (length > 1)
+            {
+                int minVal = uint8Data[0], maxVal = uint8Data[0];
+                int sum = 0;
+                int activeChannels = 0;
+                for (size_t i = 0; i < length; i++)
+                {
+                    int val = uint8Data[i];
+                    minVal = jmin(minVal, val);
+                    maxVal = jmax(maxVal, val);
+                    sum += val;
+                    if (val > 0) activeChannels++;
+                }
+                float mean = (float)sum / length;
+                formatted += "Statistics: Min=" + String(minVal) + ", Max=" + String(maxVal) +
+                           ", Mean=" + String(mean, 1) + ", Active channels=" + String(activeChannels) +
+                           "/" + String(length) + "\n";
+            }
+
+            return formatted; // Early return for spike rates data
+        }
+    }
+
     // First try to parse as JSON (for JSON-wrapped BRANDBCI)
     var jsonData;
     Result parseResult = JSON::parse(brandBCIStr, jsonData);
@@ -344,13 +407,53 @@ String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, in
         if (length > 50) formatted += "...";
         formatted += "\n\n";
 
-        // Try to interpret as float array
+        // Try to interpret as different data types
+        bool interpreted = false;
+
+        // First try uint8 array (common for spike rates)
+        if (length > 0)
+        {
+            const uint8_t* uint8Data = reinterpret_cast<const uint8_t*>(data);
+            formatted += "UInt8 values (" + String(length) + " bytes): [";
+            int displayCount = jmin((int)length, 10);
+
+            for (int i = 0; i < displayCount; i++)
+            {
+                if (i > 0) formatted += ", ";
+                formatted += String((int)uint8Data[i]);
+            }
+
+            if (length > displayCount)
+            {
+                formatted += ", ..., " + String((int)uint8Data[length-1]);
+            }
+            formatted += "]\n";
+
+            // Show statistics for uint8 data
+            if (length > 1)
+            {
+                int minVal = uint8Data[0], maxVal = uint8Data[0];
+                int sum = 0;
+                for (size_t i = 0; i < length; i++)
+                {
+                    int val = uint8Data[i];
+                    minVal = jmin(minVal, val);
+                    maxVal = jmax(maxVal, val);
+                    sum += val;
+                }
+                float mean = (float)sum / length;
+                formatted += "Statistics: Min=" + String(minVal) + ", Max=" + String(maxVal) + ", Mean=" + String(mean, 1) + "\n";
+            }
+            interpreted = true;
+        }
+
+        // Also try float array interpretation if length is suitable
         if (length >= sizeof(float) && length % sizeof(float) == 0)
         {
             int numFloats = length / sizeof(float);
             const float* floatData = reinterpret_cast<const float*>(data);
 
-            formatted += "Float values (" + String(numFloats) + "): [";
+            formatted += "\nFloat interpretation (" + String(numFloats) + " values): [";
             int displayCount = jmin(numFloats, 10);
 
             for (int i = 0; i < displayCount; i++)
@@ -383,9 +486,10 @@ String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, in
             }
             formatted += "]\n";
         }
-        else
+
+        if (!interpreted)
         {
-            formatted += "Data length not suitable for float array interpretation\n";
+            formatted += "Unable to interpret binary data\n";
         }
     }
 

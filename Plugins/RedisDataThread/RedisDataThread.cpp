@@ -520,9 +520,11 @@ Array<String> RedisDataThread::getLatestRecords(int numRecords)
                                     String fieldName(fieldsReply->element[j]->str);
 
                                     // Check for selected field or common field names
+                                    // Added spike_rates for neural_data_simulator.py compatibility
                                     if (fieldName == targetField ||
                                         fieldName == "brandbci_data" ||
-                                        fieldName == "data")
+                                        fieldName == "data" ||
+                                        fieldName == "spike_rates")
                                     {
                                         String record(fieldsReply->element[j + 1]->str, fieldsReply->element[j + 1]->len);
                                         records.add(record);
@@ -1355,13 +1357,64 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
         if (i + 1 < fieldsReply->elements)
         {
             String fieldName(fieldsReply->element[i]->str);
-            String fieldValue(fieldsReply->element[i + 1]->str);
+            redisReply* fieldReply = fieldsReply->element[i + 1];
 
-            LOGD("Legacy stream field: ", fieldName, " = ", fieldValue.substring(0, 100), "...");
+            LOGD("Legacy stream field: ", fieldName);
 
-            // Process different field types
-            if (fieldName == "brandbci_data" || fieldName == "data")
+            // Handle spike_rates field as binary data for neural_data_simulator format
+            if (fieldName == "spike_rates" && dataFormat == "brandbci")
             {
+                Array<float> channelData;
+                bool parseSuccess = parseBinarySpikeRates(fieldReply, channelData);
+
+                if (parseSuccess && channelData.size() == numDataChannels)
+                {
+                    // Add data to buffer
+                    if (sourceBuffers.size() > 0)
+                    {
+                        DataBuffer* buffer = sourceBuffers[0];
+                        if (buffer != nullptr)
+                        {
+                            // Prepare data for buffer (channel-major order)
+                            int numSamples = 1; // One sample per stream entry
+                            int64 sampleNumber = currentSampleNumber.load();
+                            double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
+                            uint64 eventCode = 0;
+
+                            int written = buffer->addToBuffer(channelData.getRawDataPointer(),
+                                                            &sampleNumber,
+                                                            &timestamp,
+                                                            &eventCode,
+                                                            numSamples);
+
+                            if (written > 0)
+                            {
+                                currentSampleNumber++;
+                                LOGD("Added ", numDataChannels, " channels from spike_rates to buffer, sample #", currentSampleNumber.load());
+                                return true;
+                            }
+                            else
+                            {
+                                LOGE("Failed to write spike_rates to DataBuffer");
+                            }
+                        }
+                    }
+                }
+                else if (!parseSuccess)
+                {
+                    LOGE("Failed to parse binary spike_rates data");
+                }
+                else
+                {
+                    LOGE("Channel count mismatch in spike_rates: got ", channelData.size(), " channels, expected ", numDataChannels);
+                }
+            }
+            // Process traditional text-based fields
+            else if (fieldName == "brandbci_data" || fieldName == "data")
+            {
+                String fieldValue(fieldReply->str);
+                LOGD("Text field value: ", fieldValue.substring(0, 100), "...");
+
                 Array<float> channelData;
                 bool parseSuccess = false;
 
@@ -1491,6 +1544,70 @@ bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& cha
         LOGE("Unknown exception parsing BRANDBCI data");
         return false;
     }
+}
+
+bool RedisDataThread::parseBinarySpikeRates(redisReply* fieldReply, Array<float>& channelData)
+{
+#ifdef REDIS_ENABLED
+    if (fieldReply == nullptr || fieldReply->type != REDIS_REPLY_STRING)
+    {
+        LOGE("Invalid field reply for spike_rates parsing");
+        return false;
+    }
+
+    // Get binary data from Redis reply
+    const char* binaryData = fieldReply->str;
+    size_t dataLength = fieldReply->len;
+
+    LOGD("Parsing binary spike_rates data, length: ", dataLength, " bytes");
+
+    if (dataLength == 0)
+    {
+        LOGE("Empty spike_rates data");
+        return false;
+    }
+
+    // The neural_data_simulator sends spike_rates as uint8 array
+    // Each byte represents the spike rate for one channel
+    channelData.clear();
+    channelData.ensureStorageAllocated(dataLength);
+
+    // Convert uint8 values to float
+    for (size_t i = 0; i < dataLength; i++)
+    {
+        uint8_t spikeRate = static_cast<uint8_t>(binaryData[i]);
+        channelData.add(static_cast<float>(spikeRate));
+    }
+
+    LOGD("Successfully parsed ", channelData.size(), " spike rate channels from binary data");
+
+    // Log some sample values for debugging
+    if (channelData.size() > 0)
+    {
+        float avgRate = 0.0f;
+        int activeChannels = 0;
+        for (int i = 0; i < channelData.size(); i++)
+        {
+            avgRate += channelData[i];
+            if (channelData[i] > 0) activeChannels++;
+        }
+        avgRate /= channelData.size();
+
+        LOGD("Spike rates - Average: ", avgRate, ", Active channels: ", activeChannels, "/", channelData.size());
+
+        // Log first few values
+        String sampleValues = "First 10 values: ";
+        for (int i = 0; i < jmin(10, channelData.size()); i++)
+        {
+            sampleValues += String(channelData[i]) + " ";
+        }
+        LOGD(sampleValues);
+    }
+
+    return true;
+#else
+    return false;
+#endif
 }
 
 void RedisDataThread::handleRedisError(const String& operation)
