@@ -1555,11 +1555,13 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
 
         // Add to combo box if not already present
         bool found = false;
+        int presetIndex = -1;
         for (int i = 0; i < presetCombo->getNumItems(); i++)
         {
             if (presetCombo->getItemText(i) == presetName)
             {
                 found = true;
+                presetIndex = i;
                 break;
             }
         }
@@ -1567,6 +1569,13 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
         if (!found)
         {
             presetCombo->addItem(presetName, presetCombo->getNumItems() + 1);
+            presetIndex = presetCombo->getNumItems() - 1; // Index of the newly added item
+        }
+
+        // Automatically select the saved preset in the dropdown
+        if (presetIndex >= 0)
+        {
+            presetCombo->setSelectedItemIndex(presetIndex, dontSendNotification);
         }
     }
 }
