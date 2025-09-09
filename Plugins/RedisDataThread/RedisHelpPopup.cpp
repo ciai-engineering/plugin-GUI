@@ -98,14 +98,10 @@ String RedisHelpPopup::getHelpText()
         "DATA FORMAT:\n"
         "  * Sample Rate: Expected sampling frequency in Hz\n"
         "  * Channels: Number of data channels per sample\n"
-        "  * Format: Data encoding format\n"
-        "    - BRANDBCI: Native BRANDBCI format (recommended)\n"
-        "    - JSON: Human-readable, flexible\n"
-        "    - Binary: Highest performance\n\n"
+        "  * Format: BRANDBCI (fixed)\n\n"
 
         "ADVANCED SETTINGS:\n"
         "  * Buffer Size: Internal buffer size (100-100000 samples)\n"
-        "  * OpenEphys Format: Enable native Open Ephys integration\n"
         "  * Data Validation: Enable real-time data checking\n\n"
 
         "PRESETS:\n"
@@ -115,8 +111,8 @@ String RedisHelpPopup::getHelpText()
         "  * Testing (8ch, 1kHz): Development and testing configuration\n\n"
 
         "PERFORMANCE TIPS:\n"
-        "  * Use Binary format for highest performance\n"
-        "  * Enable Stream Mode for real-time applications\n"
+        "  * Use Stream Mode only; List mode is disabled\n"
+        "  * Ensure Data Type and Channels match your stream\n"
         "  * Adjust buffer size based on latency requirements\n"
         "  * Disable Data Validation for maximum speed\n\n"
 

@@ -182,9 +182,6 @@ private:
     std::unique_ptr<TextEditor> bufferSizeEditor;
     std::unique_ptr<Label> bufferSizeTooltip;
     
-    std::unique_ptr<Label> openEphysFormatLabel;
-    std::unique_ptr<ToggleButton> openEphysFormatButton;
-    std::unique_ptr<Label> openEphysFormatTooltip;
 
     std::unique_ptr<Label> dataValidationLabel;
     std::unique_ptr<ToggleButton> dataValidationButton;

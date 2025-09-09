@@ -23,9 +23,12 @@
 
 #include "RedisDataDisplayPopup.h"
 
-RedisDataDisplayPopup::RedisDataDisplayPopup(const Array<String>& records, const String& dataFormat)
+RedisDataDisplayPopup::RedisDataDisplayPopup(const Array<String>& records, const String& dataFormat,
+                                             const String& configuredDataTypeIn, int configuredChannelsIn)
     : dataRecords(records)
     , format(dataFormat)
+    , configuredDataType(configuredDataTypeIn)
+    , configuredChannels(configuredChannelsIn)
 {
     setSize(600, 400);
     setupUI();
@@ -87,6 +90,10 @@ String RedisDataDisplayPopup::formatDataForDisplay()
     }
 
     displayText += "Data Format: " + format.toUpperCase() + "\n";
+    if (configuredDataType.isNotEmpty())
+        displayText += "Configured Data Type: " + configuredDataType + "\n";
+    if (configuredChannels > 0)
+        displayText += "Configured Channels: " + String(configuredChannels) + "\n";
     displayText += "Number of Records: " + String(dataRecords.size()) + "\n";
     displayText += "Channel: Latest " + String(dataRecords.size()) + " records\n";
     displayText += String::repeatedString("=", 60) + "\n\n";
@@ -129,8 +136,16 @@ String RedisDataDisplayPopup::formatDataForDisplay()
             else
             {
                 LOGD("JSON parse successful but not an object for record ", i + 1);
-                displayText += "Record " + String(i + 1) + " (JSON but not object):\n";
-                displayText += dataRecords[i] + "\n\n";
+                // Skip empty or non-object JSON records to reduce clutter
+                if (dataRecords[i].isNotEmpty() && dataRecords[i].trim().length() > 2)
+                {
+                    displayText += "Record " + String(i + 1) + " (JSON but not object):\n";
+                    displayText += dataRecords[i] + "\n\n";
+                }
+                else
+                {
+                    LOGD("Skipping empty JSON record ", i + 1);
+                }
             }
         }
         else
@@ -287,210 +302,106 @@ String RedisDataDisplayPopup::formatBrandBCIRecord(const String& brandBCIStr, in
     formatted += "Record " + String(recordIndex) + " (BRANDBCI):\n";
     formatted += String::repeatedString("-", 30) + "\n";
 
-    // Get raw binary data correctly
+    // Interpret brandBCIStr as raw binary from neural_data_simulator: 1 sample, N channels
     const char* data = brandBCIStr.getCharPointer().getAddress();
     size_t length = brandBCIStr.getNumBytesAsUTF8();
 
     formatted += "Raw BRANDBCI data (" + String(length) + " bytes):\n";
 
-    // Check if this looks like spike_rates data (uint8 array from neural_data_simulator.py)
-    // Spike rates are typically small values (0-255) and the length should match expected channel count
-    bool looksLikeSpikeRates = (length > 0 && length <= 512); // Reasonable channel count range
-    if (looksLikeSpikeRates)
-    {
-        // Check if all values are in reasonable spike rate range (0-255 for uint8)
-        bool allValuesReasonable = true;
-        for (size_t i = 0; i < length && i < 100; i++) // Check first 100 bytes
-        {
-            uint8_t val = static_cast<uint8_t>(data[i]);
-            // Spike rates should typically be in range 0-100, but allow up to 255 for uint8
-            if (val > 255) // This check is redundant for uint8, but kept for clarity
-            {
-                allValuesReasonable = false;
-                break;
-            }
-        }
+    // Use configured dtype/channels if provided; otherwise assume uint8
+    String dtype = configuredDataType.isNotEmpty() ? configuredDataType : String("uint8");
+    int channels = configuredChannels > 0 ? configuredChannels : (int)length; // best-effort
 
-        if (allValuesReasonable)
+    int bpe = 1;
+    if (dtype == "int16" || dtype == "<i2") bpe = sizeof(int16);
+    else if (dtype == "uint16" || dtype == "<u2") bpe = sizeof(uint16);
+    else if (dtype == "int32" || dtype == "<i4") bpe = sizeof(int32);
+    else if (dtype == "float32" || dtype == "<f4") bpe = sizeof(float);
+    else if (dtype == "float64" || dtype == "<f8") bpe = sizeof(double);
+
+    int elements = (bpe > 0) ? (int)(length / bpe) : (int)length;
+    channels = (configuredChannels > 0 ? configuredChannels : elements);
+
+    if (bpe > 0 && (int)length == channels * bpe)
+    {
+        if (dtype == "int16" || dtype == "<i2")
         {
+            const int16* p = reinterpret_cast<const int16*>(data);
             formatted += "Detected: Spike rates data (neural_data_simulator.py format)\n";
-            formatted += "Interpreting as uint8 spike rates (" + String(length) + " channels):\n";
-
-            const uint8_t* uint8Data = reinterpret_cast<const uint8_t*>(data);
+            formatted += "Interpreting as int16 spike rates (" + String(channels) + " channels):\n";
             formatted += "Spike rates: [";
-            int displayCount = jmin((int)length, 10);
-
-            for (int i = 0; i < displayCount; i++)
-            {
-                if (i > 0) formatted += ", ";
-                formatted += String((int)uint8Data[i]);
-            }
-
-            if (length > displayCount)
-            {
-                formatted += ", ..., " + String((int)uint8Data[length-1]);
-            }
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String(p[i]); }
+            if (channels > show) formatted += ", ..., " + String(p[channels-1]);
             formatted += "]\n";
-
-            // Show statistics for spike rates
-            if (length > 1)
-            {
-                int minVal = uint8Data[0], maxVal = uint8Data[0];
-                int sum = 0;
-                int activeChannels = 0;
-                for (size_t i = 0; i < length; i++)
-                {
-                    int val = uint8Data[i];
-                    minVal = jmin(minVal, val);
-                    maxVal = jmax(maxVal, val);
-                    sum += val;
-                    if (val > 0) activeChannels++;
-                }
-                float mean = (float)sum / length;
-                formatted += "Statistics: Min=" + String(minVal) + ", Max=" + String(maxVal) +
-                           ", Mean=" + String(mean, 1) + ", Active channels=" + String(activeChannels) +
-                           "/" + String(length) + "\n";
-            }
-
-            return formatted; // Early return for spike rates data
         }
-    }
-
-    // First try to parse as JSON (for JSON-wrapped BRANDBCI)
-    var jsonData;
-    Result parseResult = JSON::parse(brandBCIStr, jsonData);
-
-    if (parseResult.wasOk())
-    {
-        // Handle BRANDBCI JSON format
-        formatted += "JSON format detected:\n";
-        if (jsonData.hasProperty("data"))
+        else if (dtype == "uint16" || dtype == "<u2")
         {
-            var dataArray = jsonData["data"];
-            if (dataArray.isArray())
-            {
-                formatted += "Data array (" + String(dataArray.size()) + " channels): [";
-                int displayCount = jmin(dataArray.size(), 10);
-                for (int i = 0; i < displayCount; i++)
-                {
-                    if (i > 0) formatted += ", ";
-                    formatted += String((double)dataArray[i], 3);
-                }
-                if (dataArray.size() > displayCount)
-                {
-                    formatted += ", ..., " + String((double)dataArray[dataArray.size()-1], 3);
-                }
-                formatted += "]\n";
-            }
-            else
-            {
-                formatted += "Data: " + dataArray.toString() + "\n";
-            }
-        }
-        if (jsonData.hasProperty("timestamp"))
-        {
-            formatted += "Timestamp: " + String((int64)jsonData["timestamp"]) + "\n";
-        }
-    }
-    else
-    {
-        // Handle binary BRANDBCI format
-        formatted += "Binary format detected:\n";
-
-        // Show hex representation
-        formatted += "Hex data: ";
-        for (size_t i = 0; i < jmin(length, (size_t)50); i++)
-        {
-            if (i > 0 && i % 16 == 0) formatted += "\n          ";
-            formatted += String::formatted("%02x ", (unsigned char)data[i]);
-        }
-        if (length > 50) formatted += "...";
-        formatted += "\n\n";
-
-        // Try to interpret as different data types
-        bool interpreted = false;
-
-        // First try uint8 array (common for spike rates)
-        if (length > 0)
-        {
-            const uint8_t* uint8Data = reinterpret_cast<const uint8_t*>(data);
-            formatted += "UInt8 values (" + String(length) + " bytes): [";
-            int displayCount = jmin((int)length, 10);
-
-            for (int i = 0; i < displayCount; i++)
-            {
-                if (i > 0) formatted += ", ";
-                formatted += String((int)uint8Data[i]);
-            }
-
-            if (length > displayCount)
-            {
-                formatted += ", ..., " + String((int)uint8Data[length-1]);
-            }
+            const uint16* p = reinterpret_cast<const uint16*>(data);
+            formatted += "Interpreting as uint16 spike rates (" + String(channels) + " channels):\n";
+            formatted += "Spike rates: [";
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String(p[i]); }
+            if (channels > show) formatted += ", ..., " + String(p[channels-1]);
             formatted += "]\n";
-
-            // Show statistics for uint8 data
-            if (length > 1)
-            {
-                int minVal = uint8Data[0], maxVal = uint8Data[0];
-                int sum = 0;
-                for (size_t i = 0; i < length; i++)
-                {
-                    int val = uint8Data[i];
-                    minVal = jmin(minVal, val);
-                    maxVal = jmax(maxVal, val);
-                    sum += val;
-                }
-                float mean = (float)sum / length;
-                formatted += "Statistics: Min=" + String(minVal) + ", Max=" + String(maxVal) + ", Mean=" + String(mean, 1) + "\n";
-            }
-            interpreted = true;
         }
-
-        // Also try float array interpretation if length is suitable
-        if (length >= sizeof(float) && length % sizeof(float) == 0)
+        else if (dtype == "int32" || dtype == "<i4")
         {
-            int numFloats = length / sizeof(float);
-            const float* floatData = reinterpret_cast<const float*>(data);
-
-            formatted += "\nFloat interpretation (" + String(numFloats) + " values): [";
-            int displayCount = jmin(numFloats, 10);
-
-            for (int i = 0; i < displayCount; i++)
-            {
-                if (i > 0) formatted += ", ";
-
-                float value = floatData[i];
-                if (std::isfinite(value) && std::abs(value) < 1e6)
-                {
-                    formatted += String(value, 3);
-                }
-                else
-                {
-                    formatted += String::formatted("0x%08x", *(uint32*)&value);
-                }
-            }
-
-            if (numFloats > displayCount)
-            {
-                formatted += ", ..., ";
-                float lastValue = floatData[numFloats-1];
-                if (std::isfinite(lastValue) && std::abs(lastValue) < 1e6)
-                {
-                    formatted += String(lastValue, 3);
-                }
-                else
-                {
-                    formatted += String::formatted("0x%08x", *(uint32*)&lastValue);
-                }
-            }
+            const int32* p = reinterpret_cast<const int32*>(data);
+            formatted += "Interpreting as int32 spike rates (" + String(channels) + " channels):\n";
+            formatted += "Spike rates: [";
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String(p[i]); }
+            if (channels > show) formatted += ", ..., " + String(p[channels-1]);
+            formatted += "]\n";
+        }
+        else if (dtype == "float32" || dtype == "<f4")
+        {
+            const float* p = reinterpret_cast<const float*>(data);
+            formatted += "Interpreting as float32 spike rates (" + String(channels) + " channels):\n";
+            formatted += "Spike rates: [";
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String(p[i], 3); }
+            if (channels > show) formatted += ", ..., " + String(p[channels-1], 3);
+            formatted += "]\n";
+        }
+        else if (dtype == "float64" || dtype == "<f8")
+        {
+            const double* p = reinterpret_cast<const double*>(data);
+            formatted += "Interpreting as float64 spike rates (" + String(channels) + " channels):\n";
+            formatted += "Spike rates: [";
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String(p[i], 6); }
+            if (channels > show) formatted += ", ..., " + String(p[channels-1], 6);
+            formatted += "]\n";
+        }
+        else // default uint8
+        {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+            formatted += "Detected: Spike rates data (neural_data_simulator.py format)\n";
+            formatted += "Interpreting as uint8 spike rates (" + String(channels) + " channels):\n";
+            formatted += "Spike rates: [";
+            int show = jmin(channels, 10);
+            for (int i = 0; i < show; ++i) { if (i>0) formatted += ", "; formatted += String((int)p[i]); }
+            if (channels > show) formatted += ", ..., " + String((int)p[channels-1]);
             formatted += "]\n";
         }
 
-        if (!interpreted)
+        // Quick stats for simple view (uint8-like semantics)
+        int minVal = INT_MAX, maxVal = INT_MIN, sum = 0, active = 0;
+        for (int i = 0; i < (int)(length / bpe); ++i)
         {
-            formatted += "Unable to interpret binary data\n";
+            int v = 0;
+            if (dtype == "int16"||dtype=="<i2") v = reinterpret_cast<const int16*>(data)[i];
+            else if (dtype == "uint16"||dtype=="<u2") v = reinterpret_cast<const uint16*>(data)[i];
+            else if (dtype == "int32"||dtype=="<i4") v = reinterpret_cast<const int32*>(data)[i];
+            else if (dtype == "float32"||dtype=="<f4") v = (int)reinterpret_cast<const float*>(data)[i];
+            else if (dtype == "float64"||dtype=="<f8") v = (int)reinterpret_cast<const double*>(data)[i];
+            else v = reinterpret_cast<const uint8_t*>(data)[i];
+            minVal = jmin(minVal, v); maxVal = jmax(maxVal, v); sum += v; if (v>0) active++;
         }
+        float mean = (length>0) ? (float)sum / (length / bpe) : 0.0f;
+        formatted += "Statistics: Min=" + String(minVal) + ", Max=" + String(maxVal) + ", Mean=" + String(mean, 1) + ", Active channels=" + String(active) + "/" + String(channels) + "\n";
     }
 
     formatted += "\n";
@@ -585,6 +496,26 @@ String RedisDataDisplayPopup::formatOpenEphysRecord(const String& jsonStr, int r
         // Interpret binary data based on data type
         String dataType = jsonData.hasProperty("data_dtype") ? String(jsonData["data_dtype"]) : "unknown";
         formatted += "\nBinary Data Interpretation (type: " + dataType + "):\n";
+
+        // Validation against configured channels if present in JSON
+        int channels = jsonData.hasProperty("n_channels") ? (int)jsonData["n_channels"] : 0;
+        int samples  = jsonData.hasProperty("n_samples")  ? (int)jsonData["n_samples"]  : 1;
+        auto bpe = [&](const String& dt){
+            if (dt == "float32" || dt == "<f4") return (int)sizeof(float);
+            if (dt == "float64" || dt == "<f8") return (int)sizeof(double);
+            if (dt == "int16"  || dt == "<i2") return (int)sizeof(int16);
+            if (dt == "int32"  || dt == "<i4") return (int)sizeof(int32);
+            if (dt == "uint16" || dt == "<u2") return (int)sizeof(uint16);
+            return 0;
+        };
+        int bytesPerEl = bpe(dataType);
+        if (channels > 0 && bytesPerEl > 0)
+        {
+            size_t expected = (size_t)channels * (size_t)samples * (size_t)bytesPerEl;
+            formatted += "Expected bytes (channels*samples*bpe) = " + String((int)expected) + ", got " + String((int)binaryLength) + "\n";
+            if (expected != binaryLength)
+                formatted += "WARNING: Byte-length does not match configured channels/samples/type\n";
+        }
 
         bool interpreted = false;
 

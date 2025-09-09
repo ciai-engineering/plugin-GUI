@@ -275,24 +275,20 @@ void RedisConfigurationPanel::createStreamGroup()
     dataFormatLabel = std::make_unique<Label>("Data Format Label", "Format:");
     dataFormatLabel->setBounds(15, yOffset, labelWidth, 20);
     dataFormatLabel->setFont(FontOptions("Inter", "Regular", 12));
-    streamGroup->addAndMakeVisible(dataFormatLabel.get());
 
     dataFormatCombo = std::make_unique<ComboBox>("Data Format Combo");
     dataFormatCombo->setBounds(100, yOffset, 180, 20);
-    dataFormatCombo->addItem("BRANDBCI (recommended)", 1);
-    dataFormatCombo->addItem("JSON (general)", 2);
-    dataFormatCombo->addItem("Binary (performance)", 3);
-    dataFormatCombo->addListener(this);
-    dataFormatCombo->setColour(ComboBox::backgroundColourId, findColour(ThemeColours::widgetBackground));
-    dataFormatCombo->setColour(ComboBox::textColourId, findColour(ThemeColours::defaultText));
-    dataFormatCombo->setColour(ComboBox::outlineColourId, findColour(ThemeColours::outline));
-    dataFormatCombo->setColour(ComboBox::focusedOutlineColourId, findColour(ThemeColours::outline));
-    streamGroup->addAndMakeVisible(dataFormatCombo.get());
+    dataFormatCombo->addItem("BRANDBCI (fixed)", 1);
+    dataFormatCombo->setSelectedItemIndex(0, dontSendNotification);
 
-    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(encoding type)");
+    dataFormatTooltip = std::make_unique<Label>("Data Format Tooltip", "(fixed)");
     dataFormatTooltip->setBounds(290, yOffset, 120, 20);
     dataFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
     dataFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
+
+    // Show data format controls as fixed label
+    streamGroup->addAndMakeVisible(dataFormatLabel.get());
+    streamGroup->addAndMakeVisible(dataFormatCombo.get());
     streamGroup->addAndMakeVisible(dataFormatTooltip.get());
 
     yOffset += rowHeight;
@@ -457,8 +453,8 @@ void RedisConfigurationPanel::createStreamGroup()
     streamModeButton->addListener(this);
     streamGroup->addAndMakeVisible(streamModeButton.get());
 
-    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "(real-time streaming)");
-    streamModeTooltip->setBounds(130, yOffset, 160, 20);
+    streamModeTooltip = std::make_unique<Label>("Stream Mode Tooltip", "(Stream only; List mode disabled)");
+    streamModeTooltip->setBounds(130, yOffset, 260, 20);
     streamModeTooltip->setFont(FontOptions("Inter", "Regular", 10));
     streamModeTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
     streamGroup->addAndMakeVisible(streamModeTooltip.get());
@@ -606,7 +602,7 @@ void RedisConfigurationPanel::buttonClicked(Button* button)
     {
         refreshAvailableChannels();
     }
-    else if (button == openEphysFormatButton.get() || button == dataValidationButton.get())
+    else if (button == dataValidationButton.get())
     {
         applyToThread();
     }
@@ -655,26 +651,6 @@ void RedisConfigurationPanel::createAdvancedGroup()
     advancedGroup->addAndMakeVisible(bufferSizeTooltip.get());
 
     yOffset += rowHeight + 8; // Add more space to create visual separation
-
-    // Format Options section (grouped together for better logic)
-    // Open Ephys Format
-    openEphysFormatLabel = std::make_unique<Label>("OpenEphys Format Label", "OpenEphys Format:");
-    openEphysFormatLabel->setBounds(15, yOffset, labelWidth, 20);
-    openEphysFormatLabel->setFont(FontOptions("Inter", "Regular", 12));
-    advancedGroup->addAndMakeVisible(openEphysFormatLabel.get());
-
-    openEphysFormatButton = std::make_unique<ToggleButton>("OpenEphys Format");
-    openEphysFormatButton->setBounds(120, yOffset, 20, 20);
-    openEphysFormatButton->addListener(this);
-    advancedGroup->addAndMakeVisible(openEphysFormatButton.get());
-
-    openEphysFormatTooltip = std::make_unique<Label>("OpenEphys Format Tooltip", "(native format)");
-    openEphysFormatTooltip->setBounds(150, yOffset, 100, 20);
-    openEphysFormatTooltip->setFont(FontOptions("Inter", "Regular", 10));
-    openEphysFormatTooltip->setColour(Label::textColourId, findColour(ThemeColours::defaultText).withAlpha(0.6f));
-    advancedGroup->addAndMakeVisible(openEphysFormatTooltip.get());
-
-    yOffset += rowHeight; // Normal spacing for related items
 
     // Data Validation - logically grouped with format options
     dataValidationLabel = std::make_unique<Label>("Data Validation Label", "Data Validation:");
@@ -758,7 +734,6 @@ void RedisConfigurationPanel::setupCustomTooltips()
     numChannelsEditor->setTooltip("Number of Channels");
     dataFormatCombo->setTooltip("Data Encoding Format");
     bufferSizeEditor->setTooltip("Buffer Size (Samples)");
-    openEphysFormatButton->setTooltip("Enable Open Ephys Format");
     dataValidationButton->setTooltip("Enable Data Validation");
 }
 
@@ -809,9 +784,8 @@ void RedisConfigurationPanel::updateFromThread()
     sampleRateEditor->setText(String(dataThread->getSampleRate()), false);
     numChannelsEditor->setText(String(dataThread->getNumDataChannels()), false);
 
-    String format = dataThread->getDataFormat();
-    int formatIndex = format == "brandbci" ? 0 : format == "json" ? 1 : 2;
-    dataFormatCombo->setSelectedItemIndex(formatIndex, dontSendNotification);
+    // Data format is hard-locked to BRANDBCI; keep combo hidden and fixed
+    dataFormatCombo->setSelectedItemIndex(0, dontSendNotification);
 
     // Update data type setting
     String currentDataType = dataThread->getDataType();
@@ -825,7 +799,6 @@ void RedisConfigurationPanel::updateFromThread()
 
     // Update advanced settings
     bufferSizeEditor->setText(String(dataThread->getBufferSize()), false);
-    openEphysFormatButton->setToggleState(dataThread->isOpenEphysFormatEnabled(), dontSendNotification);
     dataValidationButton->setToggleState(dataThread->isDataValidationEnabled(), dontSendNotification);
 
     // Update field discovery settings
@@ -881,13 +854,11 @@ void RedisConfigurationPanel::applyToThread()
     dataThread->setSampleRate(sampleRateEditor->getText().getFloatValue());
     dataThread->setNumChannels(numChannelsEditor->getText().getIntValue());
 
-    int formatIndex = dataFormatCombo->getSelectedItemIndex();
-    String format = formatIndex == 0 ? "brandbci" : formatIndex == 1 ? "json" : "binary";
-    dataThread->setDataFormat(format);
+    // Hard lock: force brandbci format and disable OpenEphys toggle
+    dataThread->setDataFormat("brandbci");
 
     // Apply advanced settings
     dataThread->setBufferSize(bufferSizeEditor->getText().getIntValue());
-    dataThread->setOpenEphysFormatEnabled(openEphysFormatButton->getToggleState());
     dataThread->setDataValidationEnabled(dataValidationButton->getToggleState());
 
     // Apply field discovery settings
@@ -1085,32 +1056,7 @@ void RedisConfigurationPanel::updateValidationStatus()
 
 void RedisConfigurationPanel::updatePerformanceHints()
 {
-    String hint = "💡 ";
-
-    // Check data format
-    int formatIndex = dataFormatCombo->getSelectedItemIndex();
-    if (formatIndex == 2) // Binary
-    {
-        hint += "Excellent choice! Binary format provides best performance.";
-    }
-    else if (formatIndex == 0) // BRANDBCI
-    {
-        hint += "Good choice! BRANDBCI format is optimized for neural data.";
-    }
-    else // JSON
-    {
-        hint += "Consider Binary format for better performance.";
-    }
-
-    // Check stream mode
-    if (streamModeButton->getToggleState())
-    {
-        hint += " Stream mode enabled for real-time processing.";
-    }
-    else
-    {
-        hint += " Enable Stream mode for better real-time performance.";
-    }
+    String hint = "💡 BRANDBCI fixed. Use Stream mode only; List mode is disabled. Ensure Data Type and Channels match your stream.";
 
     // Check buffer size
     int bufferSize = bufferSizeEditor->getText().getIntValue();
@@ -1179,7 +1125,6 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         numChannelsEditor->setText("32");
         dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
         bufferSizeEditor->setText("5000");
-        openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
 
         // Set default field discovery settings for neural_data_simulator.py compatibility
@@ -1197,9 +1142,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for complete data recording
         sampleRateEditor->setText("30000");
         numChannelsEditor->setText("96");
-        dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
         bufferSizeEditor->setText("3000");
-        openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
     }
     else if (presetName == "Low Frequency (32ch, 1kHz)")
@@ -1212,9 +1155,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         alwaysLatestButton->setToggleState(false, dontSendNotification); // Disable for LFP recording
         sampleRateEditor->setText("1000");
         numChannelsEditor->setText("32");
-        dataFormatCombo->setSelectedItemIndex(0); // BRANDBCI
         bufferSizeEditor->setText("2000");
-        openEphysFormatButton->setToggleState(true, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
     }
     else if (presetName == "Testing (8ch, 1kHz)")
@@ -1227,9 +1168,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
         alwaysLatestButton->setToggleState(true, dontSendNotification); // Enable for testing
         sampleRateEditor->setText("1000");
         numChannelsEditor->setText("8");
-        dataFormatCombo->setSelectedItemIndex(1); // JSON
         bufferSizeEditor->setText("1000");
-        openEphysFormatButton->setToggleState(false, dontSendNotification);
         dataValidationButton->setToggleState(true, dontSendNotification);
     }
 
@@ -1256,9 +1195,7 @@ void RedisConfigurationPanel::loadPreset(const String& presetName)
                 alwaysLatestButton->setToggleState(xml->getBoolAttribute("alwaysReadLatest", true), dontSendNotification);
                 sampleRateEditor->setText(xml->getStringAttribute("sampleRate", "30000"));
                 numChannelsEditor->setText(xml->getStringAttribute("numChannels", "32"));
-                dataFormatCombo->setSelectedItemIndex(xml->getIntAttribute("dataFormat", 0));
                 bufferSizeEditor->setText(xml->getStringAttribute("bufferSize", "5000"));
-                openEphysFormatButton->setToggleState(xml->getBoolAttribute("openEphysFormat", true), dontSendNotification);
                 dataValidationButton->setToggleState(xml->getBoolAttribute("dataValidation", true), dontSendNotification);
 
                 // Load field discovery settings (critical for View Data consistency)
@@ -1438,8 +1375,13 @@ void RedisConfigurationPanel::showLatestData()
     // Retrieve latest records from Redis using the current configuration
     Array<String> records = dataThread->getLatestRecords(10);
 
-    // Create and show popup with the data
-    auto popup = std::make_unique<RedisDataDisplayPopup>(records, dataThread->getDataFormat());
+    // Create and show popup with the data, passing configured dtype & channels
+    auto popup = std::make_unique<RedisDataDisplayPopup>(
+        records,
+        dataThread->getDataFormat(),
+        dataThread->getDataType(),
+        dataThread->getNumDataChannels()
+    );
 
     // Show popup using the PopupManager
     CoreServices::getPopupManager()->showPopup(std::move(popup), dataButton.get());
@@ -1558,9 +1500,7 @@ void RedisConfigurationPanel::savePreset(const String& presetName)
     xml.setAttribute("alwaysReadLatest", alwaysLatestButton->getToggleState());
     xml.setAttribute("sampleRate", sampleRateEditor->getText());
     xml.setAttribute("numChannels", numChannelsEditor->getText());
-    xml.setAttribute("dataFormat", dataFormatCombo->getSelectedItemIndex());
     xml.setAttribute("bufferSize", bufferSizeEditor->getText());
-    xml.setAttribute("openEphysFormat", openEphysFormatButton->getToggleState());
     xml.setAttribute("dataValidation", dataValidationButton->getToggleState());
 
     // Save field discovery settings (critical for View Data consistency)
