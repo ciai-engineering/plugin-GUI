@@ -28,6 +28,9 @@
 
 #ifdef REDIS_ENABLED
 #include <hiredis/hiredis.h>
+#else
+// Forward declaration to allow pointer usage without hiredis
+struct redisReply;
 #endif
 
 #include <atomic>
@@ -249,8 +252,7 @@ private:
         }
     };
 
-    // Configuration for Open Ephys format support
-    bool enableOpenEphysFormat;
+    // Validation flag (kept)
     bool enableDataValidation;
 
     // Data type configuration
@@ -258,9 +260,7 @@ private:
 
 public:
     // Configuration getters and setters
-    void setOpenEphysFormatEnabled(bool enabled) { enableOpenEphysFormat = enabled; }
     void setDataValidationEnabled(bool enabled) { enableDataValidation = enabled; }
-    bool isOpenEphysFormatEnabled() const { return enableOpenEphysFormat; }
     bool isDataValidationEnabled() const { return enableDataValidation; }
 
     // Data type configuration
@@ -269,40 +269,33 @@ public:
 
 private:
 
-    // Data parsing methods (legacy)
-    bool parseJsonData(const String& jsonStr, Array<float>& channelData);
-    bool parseBinaryData(const char* data, size_t length, Array<float>& channelData);
-    bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
+    // Neural binary parsing
     bool parseBinarySpikeRates(redisReply* fieldReply, Array<float>& channelData);
-
-    // New Open Ephys format methods
-    bool processOpenEphysStreamEntry(redisReply* fieldsReply);
-    bool processOpenEphysData(const OpenEphysStreamData& data);
-    bool validateStreamData(const OpenEphysStreamData& data);
-    Array<int> parseDataShape(const String& shapeStr);
-    bool decodeBinaryData(const char* data, size_t length, const String& dtype,
-                         const Array<int>& shape, Array<float>& output);
-    bool addMultiSampleDataToBuffer(const Array<float>& channelData, int nChannels,
-                                  int nSamples, double baseTimestamp, int sampleRate);
-    size_t calculateExpectedDataSize(const String& dtype, const Array<int>& shape);
-
-    // Binary data decoders
-    bool decodeFloat32(const char* data, size_t length, int expectedElements, Array<float>& output);
-    bool decodeFloat64(const char* data, size_t length, int expectedElements, Array<float>& output);
-    bool decodeInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
-    bool decodeInt32(const char* data, size_t length, int expectedElements, Array<float>& output);
-    bool decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
+    // Legacy JSON/BRANDBCI parsing (stub, returns false)
+    bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
 
     // Stream methods
     bool updateBufferFromStream();
-    bool updateBufferFromList(); // Legacy BLPOP method
-    bool readFromStream(String& data, String& newId);
+    bool updateBufferFromList(); // Legacy BLPOP method (now disabled)
     bool processStreamEntry(redisReply* fieldsReply);
     bool processLegacyStreamEntry(redisReply* fieldsReply);
 
     // Error handling
     void handleRedisError(const String& operation);
     bool attemptReconnection();
+
+    // Removed Open Ephys / JSON helper declarations in hard lock cleanup
+    Array<int> parseDataShape(const String& shapeStr);
+    size_t calculateExpectedDataSize(const String& dtype, const Array<int>& shape);
+    bool decodeBinaryData(const char* data, size_t length, const String& dtype,
+                          const Array<int>& shape, Array<float>& output);
+    bool decodeFloat32(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeFloat64(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeInt32(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
+    bool addMultiSampleDataToBuffer(const Array<float>& channelData, int nChannels, int nSamples,
+                                    double baseTimestamp, int sampleRate);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisDataThread);
 };

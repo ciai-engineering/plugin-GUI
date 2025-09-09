@@ -36,7 +36,8 @@ class TESTABLE RedisDataDisplayPopup : public Component
 {
 public:
     /** Constructor */
-    RedisDataDisplayPopup(const Array<String>& records, const String& dataFormat);
+    RedisDataDisplayPopup(const Array<String>& records, const String& dataFormat,
+                          const String& configuredDataType, int configuredChannels);
 
     /** Destructor */
     ~RedisDataDisplayPopup();
@@ -54,6 +55,9 @@ private:
     // Data
     Array<String> dataRecords;
     String format;
+    // Configuration for consistent decoding
+    String configuredDataType;
+    int configuredChannels {0};
 
     // Helper methods
     void setupUI();
