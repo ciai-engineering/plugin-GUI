@@ -35,6 +35,7 @@ struct redisReply;
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 class SourceNode;
 
@@ -228,9 +229,13 @@ private:
     // State management
     std::atomic<bool> isAcquiring;
     std::atomic<bool> connectionStatus;
+    std::atomic<bool> isDestroying;
 
     // Sample counting
     std::atomic<int64> currentSampleNumber;
+
+    // Thread safety for buffer operations
+    mutable std::mutex bufferMutex;
 
     // Open Ephys stream data structure
     struct OpenEphysStreamData {

@@ -41,6 +41,7 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
     , alwaysReadLatest(false)  // Sequential reading by default (no data loss)
     , isAcquiring(false)
     , connectionStatus(false)
+    , isDestroying(false)
     , currentSampleNumber(0)
     , dataType("int16")  // Default data type
 
@@ -81,6 +82,8 @@ RedisDataThread::RedisDataThread(SourceNode* sn)
 
 RedisDataThread::~RedisDataThread()
 {
+    isDestroying.store(true);
+
     if (isAcquiring.load())
     {
         stopAcquisition();
@@ -863,6 +866,14 @@ void RedisDataThread::updateSettings(OwnedArray<ContinuousChannel>* continuousCh
 
 void RedisDataThread::resizeBuffers()
 {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+
+    // Check if we're being destroyed
+    if (isDestroying.load()) {
+        LOGD("Skipping buffer resize - object is being destroyed");
+        return;
+    }
+
     // Clear existing buffers
     sourceBuffers.clear();
 
@@ -994,8 +1005,20 @@ bool RedisDataThread::updateBufferFromList()
 
             LOGD("Adding to buffer: sampleNumber=", sampleNumber, ", timestamp=", timestamp);
 
-            // Add to DataBuffer
-            DataBuffer* buffer = getBufferAddress(0);
+            // Add to DataBuffer with thread safety
+            DataBuffer* buffer = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(bufferMutex);
+
+                // Check if we're being destroyed
+                if (isDestroying.load()) {
+                    LOGD("Skipping data addition - object is being destroyed");
+                    return false;
+                }
+
+                buffer = getBufferAddress(0);
+            }
+
             if (buffer)
             {
                 LOGD("DataBuffer found, attempting to add data");
@@ -1186,12 +1209,21 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
 
                 if (parseSuccess && channelData.size() == numDataChannels)
                 {
-                    // Add data to buffer
-                    if (sourceBuffers.size() > 0)
+                    // Add data to buffer with thread safety
                     {
-                        DataBuffer* buffer = sourceBuffers[0];
-                        if (buffer != nullptr)
+                        std::lock_guard<std::mutex> lock(bufferMutex);
+
+                        // Check if we're being destroyed
+                        if (isDestroying.load()) {
+                            LOGD("Skipping data addition - object is being destroyed");
+                            return false;
+                        }
+
+                        if (sourceBuffers.size() > 0)
                         {
+                            DataBuffer* buffer = sourceBuffers[0];
+                            if (buffer != nullptr)
+                            {
                             // Prepare data for buffer (channel-major order)
                             int numSamples = 1; // One sample per stream entry
                             int64 sampleNumber = currentSampleNumber.load();
@@ -1216,6 +1248,7 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
                             }
                         }
                     }
+                    } // End of mutex lock scope
                 }
                 else if (!parseSuccess)
                 {
@@ -1695,6 +1728,15 @@ bool RedisDataThread::addMultiSampleDataToBuffer(const Array<float>& channelData
     {
         LOGE("Channel data size mismatch: expected ", nChannels * nSamples,
              ", got ", channelData.size());
+        return false;
+    }
+
+    // Thread-safe buffer access
+    std::lock_guard<std::mutex> lock(bufferMutex);
+
+    // Check if we're being destroyed
+    if (isDestroying.load()) {
+        LOGD("Skipping data addition - object is being destroyed");
         return false;
     }
 
