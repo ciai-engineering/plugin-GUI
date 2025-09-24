@@ -1201,14 +1201,49 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
 
             LOGD("Legacy stream field: ", fieldName);
 
-            // Hard lock: only handle the configured binary field for neural_data_simulator format
+            // Handle the configured field (binary or text-based)
             if (fieldName == selectedDataField)
             {
                 Array<float> channelData;
-                bool parseSuccess = parseBinarySpikeRates(fieldReply, channelData);
+                bool parseSuccess = false;
 
-                if (parseSuccess && channelData.size() == numDataChannels)
+                // Try binary parsing first (for neural_data_simulator format)
+                if (fieldReply->type == REDIS_REPLY_STRING && fieldReply->len > 0)
                 {
+                    // Check if it's binary data (spike_rates format)
+                    parseSuccess = parseBinarySpikeRates(fieldReply, channelData);
+
+                    // If binary parsing failed, try JSON parsing
+                    if (!parseSuccess)
+                    {
+                        String fieldValue(fieldReply->str, fieldReply->len);
+                        LOGD("Attempting JSON parsing for field: ", fieldName);
+                        parseSuccess = parseJsonData(fieldValue, channelData);
+                    }
+                }
+
+                if (parseSuccess && channelData.size() > 0)
+                {
+                    // Validate channel count (allow flexibility for 2D array processing)
+                    if (channelData.size() != numDataChannels)
+                    {
+                        LOGD("Channel count mismatch: got ", channelData.size(), " channels, expected ", numDataChannels,
+                             ". This may be due to 2D array processing.");
+
+                        // For 2D array processing, we might get different channel counts
+                        // Update the expected channel count if auto-detect is enabled
+                        if (autoDetectChannels && channelData.size() <= maxDataChannels)
+                        {
+                            LOGD("Auto-adjusting channel count from ", numDataChannels, " to ", channelData.size());
+                            numDataChannels = channelData.size();
+                        }
+                        else if (channelData.size() > maxDataChannels)
+                        {
+                            LOGE("Channel count exceeds maximum: ", channelData.size(), " > ", maxDataChannels);
+                            return false;
+                        }
+                    }
+
                     // Add data to buffer with thread safety
                     {
                         std::lock_guard<std::mutex> lock(bufferMutex);
@@ -1224,46 +1259,73 @@ bool RedisDataThread::processLegacyStreamEntry(redisReply* fieldsReply)
                             DataBuffer* buffer = sourceBuffers[0];
                             if (buffer != nullptr)
                             {
-                            // Prepare data for buffer (channel-major order)
-                            int numSamples = 1; // One sample per stream entry
-                            int64 sampleNumber = currentSampleNumber.load();
-                            double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
-                            uint64 eventCode = 0;
+                                // Prepare data for buffer (channel-major order)
+                                int numSamples = 1; // One sample per stream entry
+                                int64 sampleNumber = currentSampleNumber.load();
+                                double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
+                                uint64 eventCode = 0;
 
-                            int written = buffer->addToBuffer(channelData.getRawDataPointer(),
-                                                            &sampleNumber,
-                                                            &timestamp,
-                                                            &eventCode,
-                                                            numSamples);
+                                int written = buffer->addToBuffer(channelData.getRawDataPointer(),
+                                                                &sampleNumber,
+                                                                &timestamp,
+                                                                &eventCode,
+                                                                numSamples);
 
-                            if (written > 0)
-                            {
-                                currentSampleNumber++;
-                                LOGD("Added ", numDataChannels, " channels from spike_rates to buffer, sample #", currentSampleNumber.load());
-                                return true;
-                            }
-                            else
-                            {
-                                LOGE("Failed to write spike_rates to DataBuffer");
+                                if (written > 0)
+                                {
+                                    currentSampleNumber++;
+                                    LOGD("Added ", channelData.size(), " channels from field '", fieldName, "' to buffer, sample #", currentSampleNumber.load());
+                                    return true;
+                                }
+                                else
+                                {
+                                    LOGE("Failed to write data to DataBuffer");
+                                }
                             }
                         }
-                    }
                     } // End of mutex lock scope
                 }
                 else if (!parseSuccess)
                 {
-                    LOGE("Failed to parse binary spike_rates data");
+                    LOGE("Failed to parse data from field: ", fieldName);
                 }
                 else
                 {
-                    LOGE("Channel count mismatch in spike_rates: got ", channelData.size(), " channels, expected ", numDataChannels);
+                    LOGE("Empty data received from field: ", fieldName);
                 }
             }
-            // In hard lock mode, ignore all text-based fields
+            // Handle legacy field names for backward compatibility
             else if (fieldName == "brandbci_data" || fieldName == "data")
             {
-                LOGD("Ignoring text-based field '", fieldName, "' in hard lock mode");
-                // Skip to next field
+                // Try to parse as JSON if it's not the selected field
+                if (fieldReply->type == REDIS_REPLY_STRING && fieldReply->len > 0)
+                {
+                    String fieldValue(fieldReply->str, fieldReply->len);
+                    Array<float> channelData;
+
+                    LOGD("Attempting to parse legacy field: ", fieldName);
+
+                    bool parseSuccess = false;
+                    if (dataFormat == "brandbci")
+                    {
+                        parseSuccess = parseBrandBCIData(fieldValue, channelData);
+                    }
+                    else if (dataFormat == "json")
+                    {
+                        parseSuccess = parseJsonData(fieldValue, channelData);
+                    }
+
+                    if (parseSuccess && channelData.size() > 0)
+                    {
+                        LOGD("Successfully parsed legacy field '", fieldName, "' with ", channelData.size(), " channels");
+                        // Use the same buffer addition logic as above
+                        return addSingleSampleToBuffer(channelData);
+                    }
+                    else
+                    {
+                        LOGD("Failed to parse legacy field: ", fieldName);
+                    }
+                }
             }
         }
     }
@@ -1278,6 +1340,297 @@ bool RedisDataThread::parseBrandBCIData(const String& jsonStr, Array<float>& cha
 {
     // Hard lock cleanup: JSON/BRANDBCI parsing removed
     return false;
+}
+
+bool RedisDataThread::parseJsonData(const String& jsonStr, Array<float>& channelData)
+{
+    try
+    {
+        var jsonData = JSON::parse(jsonStr);
+        if (!jsonData.isObject())
+        {
+            LOGE("JSON data is not an object");
+            return false;
+        }
+
+        // Try to extract data from the selected field
+        return extractFieldFromJson(jsonData, selectedDataField, channelData);
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("Exception parsing JSON data: ", e.what());
+        return false;
+    }
+    catch (...)
+    {
+        LOGE("Unknown exception parsing JSON data");
+        return false;
+    }
+}
+
+bool RedisDataThread::extractFieldFromJson(const var& jsonData, const String& fieldName, Array<float>& output)
+{
+    Identifier fieldId(fieldName);
+    if (!jsonData.hasProperty(fieldId))
+    {
+        LOGE("JSON data does not contain field: ", fieldName);
+        return false;
+    }
+
+    var fieldValue = jsonData[fieldId];
+
+    if (fieldValue.isArray())
+    {
+        Array<var>* arrayValue = fieldValue.getArray();
+        if (!arrayValue || arrayValue->size() == 0)
+        {
+            LOGE("Field contains empty array: ", fieldName);
+            return false;
+        }
+
+        // Check if it's a 2D array
+        var firstElement = (*arrayValue)[0];
+        if (firstElement.isArray())
+        {
+            // 2D array - apply processing method
+            return process2DArray(*arrayValue, output);
+        }
+        else if (firstElement.isDouble() || firstElement.isInt())
+        {
+            // 1D array - direct conversion
+            output.clear();
+            output.ensureStorageAllocated(arrayValue->size());
+
+            for (int i = 0; i < arrayValue->size(); i++)
+            {
+                var element = (*arrayValue)[i];
+                if (element.isDouble() || element.isInt())
+                {
+                    output.add((float)element);
+                }
+                else
+                {
+                    LOGE("Non-numeric element in 1D array at index ", i);
+                    return false;
+                }
+            }
+
+            LOGD("Extracted 1D array with ", output.size(), " elements from field: ", fieldName);
+            return true;
+        }
+        else
+        {
+            LOGE("Array contains non-numeric data in field: ", fieldName);
+            return false;
+        }
+    }
+    else if (fieldValue.isDouble() || fieldValue.isInt())
+    {
+        // Scalar value
+        output.clear();
+        output.add((float)fieldValue);
+        LOGD("Extracted scalar value from field: ", fieldName);
+        return true;
+    }
+    else
+    {
+        LOGE("Field contains unsupported data type: ", fieldName);
+        return false;
+    }
+}
+
+bool RedisDataThread::process2DArray(const Array<var>& array2D, Array<float>& output)
+{
+    if (array2D.size() == 0)
+    {
+        LOGE("Empty 2D array provided");
+        return false;
+    }
+
+    // Convert var array to float array for processing
+    Array<Array<float>> floatArray2D;
+    floatArray2D.ensureStorageAllocated(array2D.size());
+
+    int expectedCols = -1;
+
+    for (int row = 0; row < array2D.size(); row++)
+    {
+        var rowVar = array2D[row];
+        if (!rowVar.isArray())
+        {
+            LOGE("Row ", row, " is not an array in 2D data");
+            return false;
+        }
+
+        Array<var>* rowArray = rowVar.getArray();
+        if (!rowArray)
+        {
+            LOGE("Failed to get array for row ", row);
+            return false;
+        }
+
+        // Check consistent column count
+        if (expectedCols == -1)
+        {
+            expectedCols = rowArray->size();
+        }
+        else if (rowArray->size() != expectedCols)
+        {
+            LOGE("Inconsistent column count in 2D array: row ", row, " has ", rowArray->size(),
+                 " columns, expected ", expectedCols);
+            return false;
+        }
+
+        // Convert row to float array
+        Array<float> floatRow;
+        floatRow.ensureStorageAllocated(rowArray->size());
+
+        for (int col = 0; col < rowArray->size(); col++)
+        {
+            var element = (*rowArray)[col];
+            if (element.isDouble() || element.isInt())
+            {
+                floatRow.add((float)element);
+            }
+            else
+            {
+                LOGE("Non-numeric element at [", row, ",", col, "] in 2D array");
+                return false;
+            }
+        }
+
+        floatArray2D.add(std::move(floatRow));
+    }
+
+    LOGD("Processing 2D array: ", floatArray2D.size(), " rows x ", expectedCols, " columns");
+
+    // Apply the selected processing method
+    return apply2DProcessingMethod(floatArray2D, output);
+}
+
+bool RedisDataThread::apply2DProcessingMethod(const Array<Array<float>>& array2D, Array<float>& output)
+{
+    if (array2D.size() == 0)
+    {
+        LOGE("Empty 2D array for processing");
+        return false;
+    }
+
+    int rows = array2D.size();
+    int cols = array2D[0].size();
+
+    output.clear();
+
+    switch (array2DProcessing)
+    {
+        case Array2DProcessing::FIRST_ROW:
+        {
+            // Take the first row
+            output.ensureStorageAllocated(cols);
+            for (int col = 0; col < cols; col++)
+            {
+                output.add(array2D[0][col]);
+            }
+            LOGD("Applied FIRST_ROW processing: extracted ", cols, " values from first row");
+            break;
+        }
+
+        case Array2DProcessing::SUM:
+        {
+            // Sum all rows element-wise
+            output.ensureStorageAllocated(cols);
+            for (int col = 0; col < cols; col++)
+            {
+                float sum = 0.0f;
+                for (int row = 0; row < rows; row++)
+                {
+                    sum += array2D[row][col];
+                }
+                output.add(sum);
+            }
+            LOGD("Applied SUM processing: summed ", rows, " rows into ", cols, " values");
+            break;
+        }
+
+        case Array2DProcessing::MEAN:
+        {
+            // Average all rows element-wise
+            output.ensureStorageAllocated(cols);
+            for (int col = 0; col < cols; col++)
+            {
+                float sum = 0.0f;
+                for (int row = 0; row < rows; row++)
+                {
+                    sum += array2D[row][col];
+                }
+                output.add(sum / (float)rows);
+            }
+            LOGD("Applied MEAN processing: averaged ", rows, " rows into ", cols, " values");
+            break;
+        }
+
+        default:
+        {
+            LOGE("Unknown 2D processing method: ", (int)array2DProcessing);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool RedisDataThread::addSingleSampleToBuffer(const Array<float>& channelData)
+{
+    if (channelData.size() == 0)
+    {
+        LOGE("Empty channel data provided");
+        return false;
+    }
+
+    // Thread-safe buffer access
+    std::lock_guard<std::mutex> lock(bufferMutex);
+
+    // Check if we're being destroyed
+    if (isDestroying.load()) {
+        LOGD("Skipping data addition - object is being destroyed");
+        return false;
+    }
+
+    if (sourceBuffers.size() == 0)
+    {
+        LOGE("No source buffers available");
+        return false;
+    }
+
+    DataBuffer* buffer = sourceBuffers[0];
+    if (!buffer)
+    {
+        LOGE("DataBuffer is null - cannot add data");
+        return false;
+    }
+
+    // Prepare data for buffer
+    int64 sampleNumber = currentSampleNumber.load();
+    double timestamp = Time::getMillisecondCounterHiRes() / 1000.0;
+    uint64 eventCode = 0;
+
+    int written = buffer->addToBuffer(const_cast<float*>(channelData.getRawDataPointer()),
+                                    &sampleNumber,
+                                    &timestamp,
+                                    &eventCode,
+                                    1);
+
+    if (written > 0)
+    {
+        currentSampleNumber++;
+        LOGD("Added ", channelData.size(), " channels to buffer, sample #", currentSampleNumber.load());
+        return true;
+    }
+    else
+    {
+        LOGE("Failed to write data to DataBuffer");
+        return false;
+    }
 }
 
 bool RedisDataThread::parseBinarySpikeRates(redisReply* fieldReply, Array<float>& channelData)
@@ -1320,41 +1673,61 @@ bool RedisDataThread::parseBinarySpikeRates(redisReply* fieldReply, Array<float>
     }
 
     const int elements = (int)(dataLength / bpe);
-    if (elements != numDataChannels)
+
+    // Check if this could be 2D array data
+    if (elements % numDataChannels != 0)
     {
-        LOGE("Channel count mismatch in spike_rates: bytes=", (int)dataLength,
-             ", dtype=", dataType, " (", bpe, "/ch), decoded elements=", elements,
-             ", expected ", numDataChannels);
+        LOGE("Element count mismatch in spike_rates: bytes=", (int)dataLength,
+             ", dtype=", dataType, " (", bpe, "/element), decoded elements=", elements,
+             ", not divisible by channels=", numDataChannels);
         return false;
     }
 
-    channelData.clear();
-    channelData.ensureStorageAllocated(elements);
+    int samplesPerChannel = elements / numDataChannels;
+
+    if (samplesPerChannel == 1)
+    {
+        LOGD("Detected 1D array: ", elements, " elements for ", numDataChannels, " channels");
+    }
+    else if (samplesPerChannel > 1)
+    {
+        LOGD("Detected 2D array: ", samplesPerChannel, " samples × ", numDataChannels, " channels = ", elements, " total elements");
+    }
+    else
+    {
+        LOGE("Invalid data structure: samplesPerChannel=", samplesPerChannel);
+        return false;
+    }
+
+    // Decode all elements first
+    Array<float> rawData;
+    rawData.clear();
+    rawData.ensureStorageAllocated(elements);
 
     if (dataType == "float32" || dataType == "<f4")
     {
         const float* ptr = reinterpret_cast<const float*>(binaryData);
-        for (int i = 0; i < elements; ++i) channelData.add(ptr[i]);
+        for (int i = 0; i < elements; ++i) rawData.add(ptr[i]);
     }
     else if (dataType == "float64" || dataType == "<f8")
     {
         const double* ptr = reinterpret_cast<const double*>(binaryData);
-        for (int i = 0; i < elements; ++i) channelData.add((float)ptr[i]);
+        for (int i = 0; i < elements; ++i) rawData.add((float)ptr[i]);
     }
     else if (dataType == "int16" || dataType == "<i2")
     {
         const int16* ptr = reinterpret_cast<const int16*>(binaryData);
-        for (int i = 0; i < elements; ++i) channelData.add((float)ptr[i]);
+        for (int i = 0; i < elements; ++i) rawData.add((float)ptr[i]);
     }
     else if (dataType == "int32" || dataType == "<i4")
     {
         const int32* ptr = reinterpret_cast<const int32*>(binaryData);
-        for (int i = 0; i < elements; ++i) channelData.add((float)ptr[i]);
+        for (int i = 0; i < elements; ++i) rawData.add((float)ptr[i]);
     }
     else if (dataType == "uint16" || dataType == "<u2")
     {
         const uint16* ptr = reinterpret_cast<const uint16*>(binaryData);
-        for (int i = 0; i < elements; ++i) channelData.add((float)ptr[i]);
+        for (int i = 0; i < elements; ++i) rawData.add((float)ptr[i]);
     }
     else
     {
@@ -1362,35 +1735,97 @@ bool RedisDataThread::parseBinarySpikeRates(redisReply* fieldReply, Array<float>
         return false;
     }
 
-    LOGD("Successfully parsed ", channelData.size(), " spike rate channels using dtype '", dataType, "'");
+    LOGD("Successfully decoded ", rawData.size(), " elements using dtype '", dataType, "'");
 
-    // Log some sample values for debugging
-    if (channelData.size() > 0)
-    {
-        float avgRate = 0.0f;
-        int activeChannels = 0;
-        for (int i = 0; i < channelData.size(); i++)
-        {
-            avgRate += channelData[i];
-            if (channelData[i] > 0) activeChannels++;
-        }
-        avgRate /= channelData.size();
+    // Now process based on whether it's 1D or 2D data
+    return processBinaryArrayData(rawData, samplesPerChannel, numDataChannels, channelData);
 
-        LOGD("Spike rates - Average: ", avgRate, ", Active channels: ", activeChannels, "/", channelData.size());
 
-        // Log first few values
-        String sampleValues = "First 10 values: ";
-        for (int i = 0; i < jmin(10, channelData.size()); i++)
-        {
-            sampleValues += String(channelData[i]) + " ";
-        }
-        LOGD(sampleValues);
-    }
-
-    return true;
 #else
     return false;
 #endif
+}
+
+bool RedisDataThread::processBinaryArrayData(const Array<float>& rawData, int samplesPerChannel, int channels, Array<float>& output)
+{
+    if (rawData.size() != samplesPerChannel * channels)
+    {
+        LOGE("Data size mismatch: expected ", samplesPerChannel * channels, " elements, got ", rawData.size());
+        return false;
+    }
+
+    output.clear();
+
+    if (samplesPerChannel == 1)
+    {
+        // 1D array - direct copy
+        output.ensureStorageAllocated(channels);
+        for (int ch = 0; ch < channels; ch++)
+        {
+            output.add(rawData[ch]);
+        }
+
+        LOGD("Processed 1D array: ", channels, " channels");
+
+        // Log sample values for debugging
+        if (output.size() > 0)
+        {
+            float avgRate = 0.0f;
+            int activeChannels = 0;
+            for (int i = 0; i < output.size(); i++)
+            {
+                avgRate += output[i];
+                if (output[i] > 0) activeChannels++;
+            }
+            avgRate /= output.size();
+
+            LOGD("Spike rates - Average: ", avgRate, ", Active channels: ", activeChannels, "/", output.size());
+
+            // Log first few values
+            String sampleValues = "First 10 values: ";
+            for (int i = 0; i < jmin(10, output.size()); i++)
+            {
+                sampleValues += String(output[i]) + " ";
+            }
+            LOGD(sampleValues);
+        }
+
+        return true;
+    }
+    else if (samplesPerChannel > 1)
+    {
+        // 2D array - convert to 2D structure and apply processing method
+        LOGD("Converting binary data to 2D array: ", samplesPerChannel, " samples × ", channels, " channels");
+
+        // Convert to 2D array structure
+        Array<Array<float>> array2D;
+        array2D.ensureStorageAllocated(samplesPerChannel);
+
+        for (int sample = 0; sample < samplesPerChannel; sample++)
+        {
+            Array<float> row;
+            row.ensureStorageAllocated(channels);
+
+            for (int ch = 0; ch < channels; ch++)
+            {
+                // Data is stored as [sample0_ch0, sample0_ch1, ..., sample0_chN, sample1_ch0, ...]
+                int index = sample * channels + ch;
+                row.add(rawData[index]);
+            }
+
+            array2D.add(std::move(row));
+        }
+
+        LOGD("Successfully converted to 2D array structure");
+
+        // Apply 2D processing method
+        return apply2DProcessingMethod(array2D, output);
+    }
+    else
+    {
+        LOGE("Invalid samplesPerChannel: ", samplesPerChannel);
+        return false;
+    }
 }
 
 void RedisDataThread::handleRedisError(const String& operation)
@@ -2143,18 +2578,27 @@ String RedisDataThread::getSampleDataFromRedis(int numSamples)
                             redisReply* valueReply = entryData->element[i + 1];
 
                             // Handle binary data safely
-                            if (fieldName == "data" && valueReply->len > 0)
+                            if ((fieldName == "data" || fieldName == "spike_rates") && valueReply->len > 0)
                             {
-                                // For binary data fields, create a placeholder
-                                jsonObj.getDynamicObject()->setProperty(fieldName, "binary_data_placeholder");
+                                // For binary data fields, create a placeholder with size info
+                                String placeholder = "binary_data_placeholder:" + String(valueReply->len);
+                                jsonObj.getDynamicObject()->setProperty(fieldName, placeholder);
                             }
                             else
                             {
                                 // For text fields, convert safely
                                 String fieldValue(valueReply->str, valueReply->len);
-                                // Check if the string contains valid UTF-8
-                                if (fieldValue.isNotEmpty() && fieldValue.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,[]{}:\"- "))
+
+                                // Try to parse as JSON first to detect structured data
+                                var testJson = JSON::parse(fieldValue);
+                                if (testJson.isObject() || testJson.isArray())
                                 {
+                                    // This is valid JSON data, keep it as-is
+                                    jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
+                                }
+                                else if (fieldValue.isNotEmpty() && fieldValue.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,[]{}:\"- \t\n\r"))
+                                {
+                                    // Extended character set for JSON compatibility
                                     jsonObj.getDynamicObject()->setProperty(fieldName, fieldValue);
                                 }
                                 else
@@ -2251,6 +2695,17 @@ Array<RedisDataThread::FieldInfo> RedisDataThread::analyzeFieldStructure(const S
             fieldInfo.fieldName = property.name.toString();
 
             var value = property.value;
+
+            // If the value is a string, try to parse it as JSON first
+            if (value.isString())
+            {
+                String valueStr = value.toString();
+                var parsedValue = JSON::parse(valueStr);
+                if (parsedValue.isArray() || parsedValue.isObject())
+                {
+                    value = parsedValue;  // Use the parsed JSON value
+                }
+            }
 
             // Analyze field type and dimensions
             if (value.isArray())
@@ -2354,13 +2809,56 @@ Array<RedisDataThread::FieldInfo> RedisDataThread::analyzeFieldStructure(const S
             {
                 // String or other type - check for binary data placeholders
                 String valueStr = value.toString();
-                if (valueStr == "binary_data_placeholder" || valueStr == "binary_data")
+                if (valueStr.startsWith("binary_data_placeholder") || valueStr == "binary_data")
                 {
-                    // This is a binary data field, assume it's suitable for neural data
-                    fieldInfo.dataType = FieldDataType::ARRAY_1D;
-                    fieldInfo.dimensions.add(numDataChannels); // Use configured channel count
-                    fieldInfo.isSuitableForNeural = true;
-                    fieldInfo.sampleData = "Binary array data (" + String(numDataChannels) + " channels)";
+                    // This is a binary data field, analyze dimensions
+                    int dataSize = 0;
+                    if (valueStr.contains(":"))
+                    {
+                        String sizeStr = valueStr.fromFirstOccurrenceOf(":", false, false);
+                        dataSize = sizeStr.getIntValue();
+                    }
+
+                    // Detect if this is 2D array based on data size and field name
+                    bool is2DArray = false;
+                    int rows = 1, cols = numDataChannels;
+
+                    if (fieldInfo.fieldName == "spike_rates" && dataSize > 0)
+                    {
+                        // For spike_rates, assume int16 data (2 bytes per element)
+                        int totalElements = dataSize / 2;
+
+                        // Check if it's a 2D array (multiple time samples)
+                        if (totalElements > numDataChannels && (totalElements % numDataChannels) == 0)
+                        {
+                            rows = totalElements / numDataChannels;
+                            cols = numDataChannels;
+                            is2DArray = true;
+                        }
+                        else if (totalElements > 32 && (totalElements % 32) == 0)
+                        {
+                            // Fallback: assume 32 channels if configured channels don't match
+                            rows = totalElements / 32;
+                            cols = 32;
+                            is2DArray = true;
+                        }
+                    }
+
+                    if (is2DArray)
+                    {
+                        fieldInfo.dataType = FieldDataType::ARRAY_2D;
+                        fieldInfo.dimensions.add(rows);
+                        fieldInfo.dimensions.add(cols);
+                        fieldInfo.isSuitableForNeural = true;
+                        fieldInfo.sampleData = "Binary 2D array data (" + String(rows) + "x" + String(cols) + ", int16)";
+                    }
+                    else
+                    {
+                        fieldInfo.dataType = FieldDataType::ARRAY_1D;
+                        fieldInfo.dimensions.add(numDataChannels);
+                        fieldInfo.isSuitableForNeural = true;
+                        fieldInfo.sampleData = "Binary array data (" + String(numDataChannels) + " channels)";
+                    }
                 }
                 else
                 {

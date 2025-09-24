@@ -276,6 +276,7 @@ private:
 
     // Neural binary parsing
     bool parseBinarySpikeRates(redisReply* fieldReply, Array<float>& channelData);
+    bool processBinaryArrayData(const Array<float>& rawData, int samplesPerChannel, int channels, Array<float>& output);
     // Legacy JSON/BRANDBCI parsing (stub, returns false)
     bool parseBrandBCIData(const String& jsonStr, Array<float>& channelData);
 
@@ -301,6 +302,13 @@ private:
     bool decodeUInt16(const char* data, size_t length, int expectedElements, Array<float>& output);
     bool addMultiSampleDataToBuffer(const Array<float>& channelData, int nChannels, int nSamples,
                                     double baseTimestamp, int sampleRate);
+    bool addSingleSampleToBuffer(const Array<float>& channelData);
+
+    // 2D Array Processing Functions
+    bool process2DArray(const Array<var>& array2D, Array<float>& output);
+    bool apply2DProcessingMethod(const Array<Array<float>>& array2D, Array<float>& output);
+    bool parseJsonData(const String& jsonStr, Array<float>& channelData);
+    bool extractFieldFromJson(const var& jsonData, const String& fieldName, Array<float>& output);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RedisDataThread);
 };
